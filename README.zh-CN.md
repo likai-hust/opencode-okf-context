@@ -1,4 +1,4 @@
-# opencode-okf
+# opencode-okf-context
 
 [English](./README.md) | 简体中文
 
@@ -49,7 +49,7 @@ L2 全文（按需，体积大，有生命周期）
 opencode 会自动加载项目里的 `.opencode/plugin/*.ts`，所以本仓库可以直接 dogfood 自己：
 
 ```bash
-cd okf-plugin
+cd opencode-okf-context
 bun install
 # fixtures/sample-bundle 里的示例知识包会被自动发现
 opencode
@@ -79,7 +79,7 @@ opencode debug agent build | grep okf       # 验证 5 个工具已注册
 自行从本仓库构建离线文件：
 
 ```bash
-cd okf-plugin
+cd opencode-okf-context
 bun install
 bun run build        # 产出 dist/index.js（yaml、@opencode-ai/* 全部已打包进去）
 cp dist/index.js ~/.config/opencode/plugin/okf.js
@@ -105,7 +105,7 @@ opencode plugin opencode-okf-context@latest --global
 
 ```jsonc
 // ~/.config/opencode/opencode.json
-{ "plugin": ["/Users/likai/workspace/okf-plugin"] }
+{ "plugin": ["/absolute/path/to/opencode-okf-context"] }
 ```
 
 > 仓库根目录已内置 `.opencode/plugin/okf.ts` 重导出 `src/index.ts`——只要把 `plugin` 指向本仓库根目录，opencode 就会自动发现并加载它，无需额外配置。
@@ -121,7 +121,7 @@ opencode plugin opencode-okf-context@latest --global
 1. `~/.config/opencode/okf.jsonc`（全局）
 2. `$OPENCODE_CONFIG_DIR/okf.jsonc`（若设置了该环境变量）
 3. `<项目>/.opencode/okf.jsonc`（项目级）
-4. `opencode.json` 里的插件选项（`["opencode-okf", {...}]`）——优先级最高
+4. `opencode.json` 里的插件选项（`["opencode-okf-context", {...}]`）——优先级最高
 
 ```jsonc
 // .opencode/okf.jsonc
@@ -189,7 +189,7 @@ bunx tsc --noEmit   # 类型检查
 
 ```bash
 bun run build       # tsup 打包 JS（yaml 已 bundle）+ tsc 生成 d.ts
-npm pack            # 生成 opencode-okf-0.1.0.tgz
+npm pack            # 生成 opencode-okf-context-0.1.0.tgz
 npm publish         # 发布到 npm（需先 npm login）
 ```
 

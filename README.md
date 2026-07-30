@@ -49,7 +49,7 @@ Protection: the `keepRecent` most recent reads are never auto-unloaded; `protect
 opencode auto-loads `.opencode/plugin/*.ts` in a project, so this repo dogfoods itself:
 
 ```bash
-cd okf-plugin
+cd opencode-okf-context
 bun install
 # The sample bundle at fixtures/sample-bundle is auto-discovered.
 opencode
@@ -79,7 +79,7 @@ opencode debug agent build | grep okf       # verify the 5 tools registered
 To build the offline file yourself from this repo:
 
 ```bash
-cd okf-plugin
+cd opencode-okf-context
 bun install
 bun run build        # produces dist/index.js (everything bundled: yaml, @opencode-ai/* )
 cp dist/index.js ~/.config/opencode/plugin/okf.js
@@ -105,7 +105,7 @@ Point the `plugin` array at this repo — opencode runs `.ts` via Bun, so edits 
 
 ```jsonc
 // ~/.config/opencode/opencode.json
-{ "plugin": ["/Users/likai/workspace/okf-plugin"] }
+{ "plugin": ["/absolute/path/to/opencode-okf-context"] }
 ```
 
 > The repo ships with `.opencode/plugin/okf.ts` re-exporting `src/index.ts` — point `plugin` at the repo root and opencode auto-discovers it, no extra config needed.
@@ -121,7 +121,7 @@ Layered, DCP-style. Later layers override earlier (deep-merged):
 1. `~/.config/opencode/okf.jsonc` (global)
 2. `$OPENCODE_CONFIG_DIR/okf.jsonc` (if set)
 3. `<project>/.opencode/okf.jsonc` (project)
-4. plugin options from `opencode.json` (`["opencode-okf", {...}]`) — highest precedence
+4. plugin options from `opencode.json` (`["opencode-okf-context", {...}]`) — highest precedence
 
 ```jsonc
 // .opencode/okf.jsonc
@@ -144,6 +144,27 @@ Layered, DCP-style. Later layers override earlier (deep-merged):
 
 Full schema: [`okf.schema.json`](./okf.schema.json).
 
+### Config reference
+
+| field | default | description |
+|---|---|---|
+| `enabled` | `true` | master switch for the plugin |
+| `scan.enabled` | `true` | auto-scan the project root to discover bundles |
+| `scan.maxDepth` | `4` | max directory depth for auto-scan |
+| `bundles` | `[]` | explicitly declared bundles, merged with scan results (config wins on conflict) |
+| `disclosure.injectManifest` | `true` | inject the L0 manifest into the system prompt |
+| `disclosure.maxManifestChars` | `2000` | char cap for the injected manifest |
+| `unload.afterTurns` | `2` | auto-unload after this many user turns since load |
+| `unload.keepRecent` | `1` | never auto-unload the N most recent reads |
+| `unload.placeholder` | `"description"` | placeholder verbosity: `description` (title + description) or `minimal` (reload hint only) |
+| `nudge.threshold` | `6000` | soft-nudge when retained OKF content exceeds this many chars |
+| `nudge.frequency` | `3` | inject the nudge at most once every N user messages |
+| `write.enabled` | `true` | enable `okf_write` |
+| `write.updateIndex` | `true` | update the parent `index.md` when writing a concept |
+| `write.appendLog` | `true` | prepend to `log.md` under today's ISO date heading when writing a concept |
+| `protectedConcepts` | `[]` | concept id globs never auto-unloaded (e.g. `tables/*`) |
+| `debug` | `false` | log unload/dedup/nudge actions to stderr |
+
 ## Coexisting with DCP
 
 opencode-okf and DCP compose cleanly — they touch different things:
@@ -164,6 +185,16 @@ bunx tsc --noEmit   # type-check
 
 Test fixtures live in [`fixtures/sample-bundle`](./fixtures/sample-bundle). The integration test
 loads the real plugin entry and exercises the hooks + tools end-to-end without an opencode server.
+
+## Build & publish
+
+```bash
+bun run build       # tsup bundles JS (yaml already bundled) + tsc emits d.ts
+npm pack            # produces opencode-okf-context-0.1.0.tgz
+npm publish         # publish to npm (npm login first)
+```
+
+Build output lives in `dist/`. `@opencode-ai/plugin` is a peerDependency provided by the opencode runtime, so the package itself has zero external runtime dependencies.
 
 ## Project layout
 
