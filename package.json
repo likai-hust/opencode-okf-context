@@ -1,0 +1,53 @@
+{
+  "name": "opencode-okf-context",
+  "version": "0.1.0",
+  "description": "OpenCode plugin: progressive disclosure + auto-unload for OKF (Open Knowledge Format) knowledge bundles. Inspired by DCP's outbound-only context transformation.",
+  "type": "module",
+  "license": "MIT",
+  "author": "",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "okf",
+    "open-knowledge-format",
+    "knowledge",
+    "context",
+    "progressive-disclosure"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "okf.schema.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.9",
+    "@opencode-ai/sdk": "^1.18.9",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^26.1.2",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2"
+  }
+}

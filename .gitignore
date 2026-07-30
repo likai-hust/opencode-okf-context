@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+release/
+
+# Packages / archives (never commit)
+*.tgz
+*.tar.gz
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Local opencode / zcode runtime state
+.opencode/node_modules/
+.opencode/package-lock.json
+.zcode/
+.omo/

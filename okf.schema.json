@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opencode.ai/okf.schema.json",
+  "title": "opencode-okf config",
+  "description": "Configuration for the opencode-okf plugin (OKF knowledge bundles: progressive disclosure + auto-unload). Place in ~/.config/opencode/okf.jsonc (global) or <project>/.opencode/okf.jsonc (project overrides).",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Master switch for the plugin."
+    },
+    "scan": {
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": { "type": "boolean", "default": true, "description": "Auto-scan the project root for OKF bundles." },
+        "maxDepth": { "type": "integer", "default": 4, "minimum": 0, "description": "Max directory depth for auto-scan." },
+        "ignore": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional directory names to skip during scan." }
+      }
+    },
+    "bundles": {
+      "type": "array",
+      "default": [],
+      "description": "Explicit bundles to load (merged with auto-scan; takes precedence on conflicts).",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "description": "Path to the bundle root (relative to project, or absolute)." },
+          "name": { "type": "string", "description": "Display name for the bundle. Defaults to the directory basename." }
+        }
+      }
+    },
+    "disclosure": {
+      "type": "object",
+      "default": {},
+      "properties": {
+        "injectManifest": { "type": "boolean", "default": true, "description": "Inject a compact bundle manifest (L0) into the system prompt." },
+        "maxManifestChars": { "type": "integer", "default": 2000, "minimum": 100, "description": "Hard cap on the manifest length injected into the system prompt." }
+      }
+    },
+    "unload": {
+      "type": "object",
+      "default": {},
+      "description": "Controls auto-unloading of loaded OKF concepts to keep the context lean.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "afterTurns": { "type": "integer", "default": 2, "minimum": 0, "description": "Replace a loaded concept's output with a placeholder after this many user turns." },
+        "keepRecent": { "type": "integer", "default": 1, "minimum": 0, "description": "Always keep the N most recent okf_read outputs, never auto-unload them." },
+        "placeholder": { "type": "string", "enum": ["description", "minimal"], "default": "description", "description": "\"description\" keeps title+type+description; \"minimal\" keeps just a reload hint." }
+      }
+    },
+    "nudge": {
+      "type": "object",
+      "default": {},
+      "description": "Soft reminders (anchored to the last user message) when a lot of OKF knowledge is loaded.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "threshold": { "type": "integer", "default": 6000, "minimum": 0, "description": "Total chars of loaded-and-not-unloaded concepts above which a nudge is injected." },
+        "frequency": { "type": "integer", "default": 3, "minimum": 1, "description": "Inject the nudge at most once every N user messages." },
+        "force": { "type": "string", "enum": ["soft", "strong"], "default": "soft" }
+      }
+    },
+    "write": {
+      "type": "object",
+      "default": {},
+      "description": "Controls the okf_write tool (create/update concepts).",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "updateIndex": { "type": "boolean", "default": true, "description": "Add/update the entry in the parent directory's index.md." },
+        "appendLog": { "type": "boolean", "default": true, "description": "Prepend an entry under today's date heading to log.md." }
+      }
+    },
+    "protectedConcepts": {
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "description": "Glob patterns of concept ids that are never auto-unloaded (e.g. \"tables/*\"). Matches against the id and against \"bundleName::id\"."
+    },
+    "debug": {
+      "type": "boolean",
+      "default": false,
+      "description": "Log unload/dedup/nudge activity to stderr."
+    }
+  }
+}
