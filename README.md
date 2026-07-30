@@ -1,4 +1,6 @@
-# opencode-okf
+# opencode-okf-context
+
+English | [简体中文](./README.zh-CN.md)
 
 An [OpenCode](https://opencode.ai) plugin that brings **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog) knowledge bundles — so your agent can read a whole knowledge base without permanently bloating its context window.
 
