@@ -41,8 +41,41 @@ L2 全文（按需，体积大，有生命周期）
 | `okf_list` | `bundle?`、`path?` | 某个 bundle 或子目录的索引（仅标题 + 描述） |
 | `okf_read` | `id`、`bundle?` | concept 的完整 markdown + 末尾一行"用完请 okf_unload"引导 |
 | `okf_search` | `query`、`bundle?`、`maxResults?` | 命中的 concept 引用 + 一行片段，绝不返回全文 |
-| `okf_write` | `id`、`type`、`title?`、`description?`、`tags?`、`body`、`bundle?`、`mode?` | 新建/更新 concept；更新父级 `index.md`；按日期头前置写入 `log.md` |
+| `okf_write` | `id`、`type?`、`title?`、`description?`、`tags?`、`body?`、`bundle?`、`mode?` | 新建/更新 concept。`update` 模式（默认）下只改传入的字段，其余从磁盘保留——可只修一个字段而无需重述整篇文档。更新父级 `index.md`；按日期头前置写入 `log.md` |
+| `okf_validate` | `id?` 或 `all: true`、`bundle?` | 只读校验报告（仅概念级规则）；每个问题附带一条可直接运行的 `okf_write(...)` 修复命令 |
 | `okf_unload` | `id?` 或 `all: true`、`bundle?` | 标记 concept 立即卸载；返回操作结果 |
+
+### 校验与修复
+
+`okf_validate` 按概念级规则检查每个 concept，报告问题（含严重级别）及修复命令：
+
+```
+✓ Validated 3 concept(s) in bundle "demo": 1 valid, 2 with issues (1 error, 3 warnings).
+
+▶ tables/bad_tags  (bundle: demo, 2 issues)
+  ⚠ [warning] title: `title` is missing; defaulting to the concept id "bad_tags".
+    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", title: "bad_tags")
+  ⚠ [warning] tags: `tags` is "core" (string); it should be an array of strings.
+    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", tags: ["core"])
+
+▶ tables/bad_type  (bundle: demo, 2 issues)
+  ✗ [error] type: `type` is missing or empty. The OKF spec requires `type` …
+    → fix: okf_write(id: "tables/bad_type", bundle: "demo", mode: "update", type: "<your type, …>")
+```
+
+规则（仅概念级）：
+
+| code | 严重级别 | 触发条件 | 可自动修复？ |
+|---|---|---|---|
+| `type-missing` | error | `type` 为空（spec 唯一硬性要求） | ❌ 需你输入 |
+| `type-not-string` | warning | `type` 不是字符串 | ✅ 强转为 `String(type)` |
+| `frontmatter-missing` | error | 完全没有 `---` 块 | ✅ 自动补齐骨架 |
+| `title-missing` | warning | `title` 为空 | ✅ 默认取 id 末段 |
+| `description-missing` | warning | `description` 为空（驱动渐进式披露） | ❌ 需你输入 |
+| `tags-not-array` | warning | `tags` 不是字符串数组 | ✅ 规范化为 `string[]` |
+| `body-empty` | warning | markdown 正文为空 | ❌ 需你输入 |
+
+`okf_validate` 绝不写文件。修复时运行它给出的 `okf_write` 命令即可——每条都用 `mode: "update"`，只改列出的字段，其余原样保留。标 ❌ 的问题需要校验器无法编造的内容，因此以带 `<占位符>` 的模板形式给出，请你填入真实内容。
 
 ## 安装（本地开发）
 
@@ -179,7 +212,7 @@ opencode-okf 与 DCP 可以干净地共存——它们处理的是不同对象�
 
 ```bash
 bun install
-bun test            # 31 个测试：core / messages / write / integration
+bun test            # 49 个测试：core / messages / write / validate / integration
 bunx tsc --noEmit   # 类型检查
 ```
 
@@ -206,9 +239,10 @@ src/
   state.ts        内存 bundle 缓存 + 每会话卸载/提醒状态
   registry.ts     bundle/concept 解析、占位符、glob 匹配
   indexing.ts     L0 清单 + L1 索引渲染（缺失 index.md 时自动合成）
-  tools.ts        5 个 okf_* 工具
+  tools.ts        6 个 okf_* 工具（含 okf_validate）
+  validate.ts     概念级校验规则（纯函数，供 okf_validate 使用）
   messages.ts     出站变换：去重 + 自动/手动卸载 + 软提醒
-tests/            core、messages（卸载/去重/提醒）、write、integration
+tests/            core、messages（卸载/去重/提醒）、write、validate、integration
 fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfood 与测试
 .opencode/plugin/okf.ts   本地开发用的重导出，让插件在本仓库内加载
 ```
@@ -218,6 +252,7 @@ fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfoo
 - 不做 LLM 生成的摘要（OKF 的 `description` 就是确定性的摘要）。
 - 不做 "strong"/阻断式提醒分层（v1 仅 soft）。
 - 不实现 Attested Computation（证明计算）执行。
+- 校验**仅限概念级**（frontmatter 的 `type`/`title`/`description`/`tags` + 正文）。bundle 结构检查（根 `index.md` 的 `okf_version`、`log.md` 是否存在、交叉链接完整性）不在范围内——那些属于专注创作的 `opencode-okf` 包。
 - 已具备发布结构，但尚未发布到 npm（运行 `bun run build` 后即可发布）。
 
 ## 许可证

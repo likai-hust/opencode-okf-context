@@ -1,10 +1,11 @@
 /**
- * The five custom tools registered by the plugin:
- *   okf_list   — browse a bundle / directory index (L1 progressive disclosure)
- *   okf_read   — load a full concept (L2); footer nudges the model to unload when done
- *   okf_search — keyword search across titles/descriptions/tags/body; returns snippets, not full docs
- *   okf_write  — create/update a concept; updates parent index.md and prepends to log.md
- *   okf_unload — explicitly unload one or all loaded concepts; reports chars freed
+ * The six custom tools registered by the plugin:
+ *   okf_list    — browse a bundle / directory index (L1 progressive disclosure)
+ *   okf_read    — load a full concept (L2); footer nudges the model to unload when done
+ *   okf_search  — keyword search across titles/descriptions/tags/body; returns snippets, not full docs
+ *   okf_write   — create/update a concept (partial update supported); updates parent index.md and prepends to log.md
+ *   okf_validate— read-only concept validation; emits okf_write fix commands for issues found
+ *   okf_unload  — explicitly unload one or all loaded concepts; reports chars freed
  *
  * Tools return strings (opencode renders tool output as text). okf_read output is what the
  * messages-transform layer later replaces with placeholders — it is the only output we track.
@@ -26,6 +27,7 @@ import {
 } from "./registry.js";
 import { state } from "./state.js";
 import { conceptKey } from "./registry.js";
+import { validateConcept, summarize, type ValidationIssue } from "./validate.js";
 import type { OkfConfig } from "./config.js";
 import type { Bundle, Concept } from "./types.js";
 
@@ -123,16 +125,16 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_write: tool({
       description:
-        'Create or update an OKF concept document. Writes YAML frontmatter + body to <bundle>/<id>.md, updates the parent directory index.md entry, and prepends a log.md entry under today\'s date. Args: id, type (required), title?, description?, tags?, body (markdown), bundle?, mode ("create"|"update", default update).',
+        'Create or update an OKF concept document. Writes YAML frontmatter + body to <bundle>/<id>.md, updates the parent directory index.md entry, and prepends a log.md entry under today\'s date. In "update" mode (default), only the fields you pass are changed — others are read from disk and preserved, so you can fix a single field without restating the whole document. In "create" mode all provided fields are written fresh. Args: id, type? (required in create; optional in update), title?, description?, tags?, body? (required in create; optional in update), bundle?, mode ("create"|"update", default update).',
       args: {
         id: tool.schema.string().describe('Concept id, e.g. "tables/new_table" (no leading slash, no .md).'),
-        type: tool.schema.string().describe('Concept type, e.g. "BigQuery Table", "Metric".'),
-        title: tool.schema.string().optional().describe("Display title. Defaults to the id."),
-        description: tool.schema.string().optional().describe("One-line description (used in indexes & placeholders)."),
-        tags: tool.schema.array(tool.schema.string()).optional().describe("Tags."),
-        body: tool.schema.string().describe("Markdown body of the concept."),
+        type: tool.schema.string().optional().describe('Concept type, e.g. "BigQuery Table", "Metric". Required when creating; optional when updating (omitted = keep current).'),
+        title: tool.schema.string().optional().describe("Display title. Defaults to the id. Omit in update to keep current."),
+        description: tool.schema.string().optional().describe("One-line description (used in indexes & placeholders). Omit in update to keep current."),
+        tags: tool.schema.array(tool.schema.string()).optional().describe("Tags. Omit in update to keep current."),
+        body: tool.schema.string().optional().describe("Markdown body of the concept. Required when creating; optional when updating (omitted = keep current)."),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
-        mode: tool.schema.enum(["create", "update"]).optional().describe('"create" fails if it exists; "update" (default) overwrites.'),
+        mode: tool.schema.enum(["create", "update"]).optional().describe('"create" fails if it exists; "update" (default) merges: only passed fields change, others are preserved from disk.'),
       },
       async execute(args) {
         if (!cfg.write.enabled) {
@@ -148,10 +150,8 @@ export function buildTools(cfg: OkfConfig) {
           throw new Error(`Invalid concept id: "${args.id}". Must not be empty, must not escape the bundle, and must not use reserved name index/log.`);
         }
 
-        const existed = bundle.concepts.has(id);
-        if (args.mode === "create" && existed) {
-          throw new Error(`Concept already exists: ${id} (mode was "create").`);
-        }
+        const mode = args.mode ?? "update";
+        let existed = bundle.concepts.has(id);
 
         const relPath = id + ".md";
         const absPath = join(bundle.root, relPath);
@@ -161,19 +161,63 @@ export function buildTools(cfg: OkfConfig) {
           throw new Error("Invalid path: escapes the bundle root.");
         }
 
-        const fm: Record<string, unknown> = { type: args.type };
+        if (mode === "create" && existed) {
+          throw new Error(`Concept already exists: ${id} (mode was "create").`);
+        }
+
+        // --- Resolve final frontmatter + body ---
+        // In "create" mode, everything is written fresh: `type` and `body` are required.
+        // In "update" mode, only passed fields change; missing ones are read from disk so a
+        // single field can be fixed without restating the whole document.
+        let finalType = args.type;
+        let finalBody = args.body;
+        let baseFm: Record<string, unknown> = {};
+
+        if (mode === "update") {
+          if (!existed) {
+            // File not tracked in cache — check the disk before treating as create.
+            const onDisk = await readFile(absPath, "utf8").catch(() => null);
+            existed = onDisk !== null;
+          }
+          if (existed) {
+            const onDisk = await readFile(absPath, "utf8");
+            const split = splitFrontmatter(onDisk);
+            baseFm = { ...split.frontmatter };
+            // type/body default to whatever is on disk when not supplied.
+            if (finalType === undefined && typeof baseFm.type === "string") {
+              finalType = baseFm.type;
+            }
+            if (finalBody === undefined) {
+              finalBody = split.body;
+            }
+          }
+        }
+
+        // After merge, validate required fields for the resulting document.
+        if (finalType === undefined || String(finalType).trim() === "") {
+          throw new Error(
+            `Concept ${id} would have no \`type\` after this write. The OKF spec requires \`type\` — pass type:"<your type>" (mode:"update" preserves the existing type).`,
+          );
+        }
+        if (finalBody === undefined) {
+          finalBody = "";
+        }
+
+        // Merge: start from disk baseline (update) or empty (create), overlay passed values.
+        const fm: Record<string, unknown> = { ...baseFm, type: finalType };
         if (args.title !== undefined) fm.title = args.title;
         if (args.description !== undefined) fm.description = args.description;
         if (args.tags !== undefined) fm.tags = args.tags;
-        const content = serializeDoc(fm, args.body);
+        const content = serializeDoc(fm, finalBody);
 
         await mkdir(dirname(absPath), { recursive: true });
         await writeFile(absPath, content, "utf8");
 
         const sideEffects: string[] = [];
+        const displayTitle = (fm.title !== undefined ? String(fm.title) : undefined) ?? id;
         if (cfg.write.updateIndex) {
           try {
-            await updateParentIndex(bundle, id, args.title ?? id, args.description);
+            await updateParentIndex(bundle, id, displayTitle, fm.description !== undefined ? String(fm.description) : undefined);
             sideEffects.push("parent index.md updated");
           } catch {
             /* best-effort */
@@ -193,7 +237,93 @@ export function buildTools(cfg: OkfConfig) {
         bundle.concepts.set(id, await parseConcept(absPath, bundle.root));
         state.markStale();
 
-        return `${existed ? "Updated" : "Created"} concept ${id} in bundle ${bundle.name}.\n${sideEffects.join("; ")}.\nFile: ${absPath}\n\nYou can read it back with okf_read(id: "${id}", bundle: "${bundle.name}").`;
+        const verb = existed ? "Updated" : "Created";
+        const mergedNote = existed && mode === "update" ? " (partial: only changed fields written)" : "";
+        return `${verb} concept ${id} in bundle ${bundle.name}${mergedNote}.\n${sideEffects.join("; ")}.\nFile: ${absPath}\n\nYou can read it back with okf_read(id: "${id}", bundle: "${bundle.name}").`;
+      },
+    }),
+
+    okf_validate: tool({
+      description:
+        'Read-only validation of OKF concept documents against the concept-level rules (type required; type/title/description/tags well-formed; body non-empty). Does NOT write files. Returns a report listing issues per concept, each with a ready-to-run okf_write(...) fix command (auto-fixable issues are pre-filled; content issues like missing type/description show a placeholder). To actually fix an issue, call okf_write with mode:"update" passing only the changed field(s). Args: id (validate one concept), or bundle/all (validate a whole bundle). At least one of id / all must be given.',
+      args: {
+        id: tool.schema.string().optional().describe('Concept id to validate, e.g. "tables/customers".'),
+        bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
+        all: tool.schema.boolean().optional().describe("Validate every concept in the bundle (ignored if id is given)."),
+      },
+      async execute(args) {
+        const bundles = await requireBundles();
+        const scope = args.bundle ? bundles.filter((b) => b.name === args.bundle) : bundles;
+        if (scope.length === 0) {
+          throw new Error(`Bundle not found: ${args.bundle ?? "(none)"}. Available: ${bundles.map((b) => b.name).join(", ")}`);
+        }
+
+        // Determine the set of (bundle, concept) pairs to validate.
+        const targets: Array<{ bundle: Bundle; concept: Concept }> = [];
+        if (args.id) {
+          const id = normalizeId(args.id);
+          let found = false;
+          for (const b of scope) {
+            const c = b.concepts.get(id);
+            if (c) {
+              targets.push({ bundle: b, concept: c });
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            throw new Error(`Concept not found: ${id}. Use okf_list to browse available concepts.`);
+          }
+        } else {
+          if (!args.all) {
+            throw new Error('Provide id (validate one concept) or all:true (validate the whole bundle).');
+          }
+          for (const b of scope) {
+            for (const c of b.concepts.values()) {
+              targets.push({ bundle: b, concept: c });
+            }
+          }
+        }
+        targets.sort((a, b) => a.bundle.name.localeCompare(b.bundle.name) || a.concept.id.localeCompare(b.concept.id));
+
+        // Validate each target and build the report.
+        const report: string[] = [];
+        const conceptsWithIssues: Array<{ bundle: Bundle; concept: Concept; issues: ValidationIssue[] }> = [];
+        let totalErrors = 0;
+        let totalWarnings = 0;
+        for (const { bundle, concept } of targets) {
+          const issues = validateConcept(concept);
+          const { errors, warnings } = summarize(issues);
+          totalErrors += errors;
+          totalWarnings += warnings;
+          if (issues.length === 0) continue;
+          conceptsWithIssues.push({ bundle, concept, issues });
+        }
+
+        const validCount = targets.length - conceptsWithIssues.length;
+        const bundleLabel = scope.length === 1 ? scope[0]!.name : `${scope.length} bundles`;
+        report.push(`Validated ${targets.length} concept(s) in ${bundleLabel}: ${validCount} valid, ${conceptsWithIssues.length} with issues (${totalErrors} error${totalErrors === 1 ? "" : "s"}, ${totalWarnings} warning${totalWarnings === 1 ? "" : "s"}).`);
+
+        if (conceptsWithIssues.length === 0) {
+          report.push("", "All validated concepts conform to the OKF concept rules. ✓");
+          return report.join("\n") + "\n";
+        }
+
+        for (const { bundle, concept, issues } of conceptsWithIssues) {
+          report.push("", `▶ ${concept.id}  (bundle: ${bundle.name}, ${issues.length} issue${issues.length === 1 ? "" : "s"})`);
+          for (const issue of issues) {
+            const icon = issue.severity === "error" ? "✗" : "⚠";
+            report.push(`  ${icon} [${issue.severity}] ${issue.field}: ${issue.message}`);
+            report.push(`    → fix: ${buildFixCommand(bundle.name, concept.id, issue)}`);
+          }
+        }
+
+        report.push(
+          "",
+          "Run the suggested okf_write calls to fix. Each uses mode:\"update\" so only the listed field changes.",
+          "Issues marked as needing input (type/description/body) require your judgment — replace the <placeholder> with real content.",
+        );
+        return report.join("\n") + "\n";
       },
     }),
 
@@ -228,6 +358,48 @@ export function buildTools(cfg: OkfConfig) {
 }
 
 // ---------- helpers ----------
+
+/**
+ * Build a ready-to-run okf_write(...) command string for a validation issue.
+ * - Auto-fixable issues are pre-filled with the concrete value (quotes/escapes handled).
+ * - Content issues (type/description/body) emit a placeholder for the model/user to fill in.
+ * Always uses mode:"update" so only the changed field is written.
+ */
+function buildFixCommand(bundleName: string, id: string, issue: ValidationIssue): string {
+  const head = `okf_write(id: "${id}", bundle: "${bundleName}", mode: "update"`;
+  const tail = ")";
+  switch (issue.code) {
+    case "type-missing":
+      return `${head}, type: "<your type, e.g. Metric | BigQuery Table | Runbook>"${tail}`;
+    case "type-not-string":
+    case "title-missing":
+      return `${head}, ${issue.field}: ${formatScalar(issue.suggested)}${tail}`;
+    case "frontmatter-missing":
+      return `${head}, type: "<your type>"${tail}`;
+    case "description-missing":
+      return `${head}, description: "<one-line description>"${tail}`;
+    case "tags-not-array":
+      return `${head}, tags: ${formatArray(issue.suggested)}${tail}`;
+    case "body-empty":
+      return `${head}, body: "<markdown body>"${tail}`;
+    default:
+      return `${head}${tail}`;
+  }
+}
+
+/** Format a scalar value for embedding in an okf_write command (quoted string). */
+function formatScalar(v: unknown): string {
+  if (typeof v !== "string") return JSON.stringify(String(v ?? ""));
+  // Use double quotes; escape any embedded double quotes/backslashes.
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** Format a string array value for embedding in an okf_write command: ["a", "b"]. */
+function formatArray(v: unknown): string {
+  const arr = Array.isArray(v) ? v : [v];
+  const items = arr.map((x) => formatScalar(x));
+  return `[${items.join(", ")}]`;
+}
 
 function normalizeDir(p: string | undefined): string {
   if (!p) return ".";

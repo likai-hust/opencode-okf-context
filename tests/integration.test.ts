@@ -29,11 +29,11 @@ function makeInput(): Parameters<typeof OkfPlugin>[0] {
   } as any;
 }
 
-test("plugin loads, registers 5 tools + system transform hook", async () => {
+test("plugin loads, registers 6 tools + system transform hook", async () => {
   const hooks = await OkfPlugin(makeInput(), OPTS);
   expect(hooks.tool).toBeDefined();
   expect(Object.keys(hooks.tool!)).toEqual(
-    expect.arrayContaining(["okf_list", "okf_read", "okf_search", "okf_write", "okf_unload"]),
+    expect.arrayContaining(["okf_list", "okf_read", "okf_search", "okf_write", "okf_validate", "okf_unload"]),
   );
   expect(hooks["experimental.chat.system.transform"]).toBeDefined();
   expect(hooks["experimental.chat.messages.transform"]).toBeDefined();

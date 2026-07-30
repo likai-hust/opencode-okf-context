@@ -41,8 +41,41 @@ Protection: the `keepRecent` most recent reads are never auto-unloaded; `protect
 | `okf_list` | `bundle?`, `path?` | a bundle / sub-directory index (titles + descriptions only) |
 | `okf_read` | `id`, `bundle?` | the full concept markdown + a footer reminding the model to unload when done |
 | `okf_search` | `query`, `bundle?`, `maxResults?` | matched concept refs + a snippet line, never full bodies |
-| `okf_write` | `id`, `type`, `title?`, `description?`, `tags?`, `body`, `bundle?`, `mode?` | creates/updates a concept; updates the parent `index.md`; prepends to `log.md` |
+| `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates/updates a concept. In `update` mode (default) only passed fields change — others are preserved from disk, so you can fix one field without restating the whole doc. Updates the parent `index.md`; prepends to `log.md` |
+| `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level rules); each issue comes with a ready-to-run `okf_write(...)` fix command |
 | `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload; reports the action |
+
+### Validation & repair
+
+`okf_validate` checks each concept against the OKF concept rules and reports issues with severity + a fix command:
+
+```
+✓ Validated 3 concept(s) in bundle "demo": 1 valid, 2 with issues (1 error, 3 warnings).
+
+▶ tables/bad_tags  (bundle: demo, 2 issues)
+  ⚠ [warning] title: `title` is missing; defaulting to the concept id "bad_tags".
+    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", title: "bad_tags")
+  ⚠ [warning] tags: `tags` is "core" (string); it should be an array of strings.
+    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", tags: ["core"])
+
+▶ tables/bad_type  (bundle: demo, 2 issues)
+  ✗ [error] type: `type` is missing or empty. The OKF spec requires `type` …
+    → fix: okf_write(id: "tables/bad_type", bundle: "demo", mode: "update", type: "<your type, …>")
+```
+
+Rules (concept-level only):
+
+| code | severity | fires when | auto-fixable? |
+|---|---|---|---|
+| `type-missing` | error | `type` is empty (spec's only hard requirement) | ❌ needs your input |
+| `type-not-string` | warning | `type` isn't a string | ✅ coerced to `String(type)` |
+| `frontmatter-missing` | error | no `---` block at all | ✅ scaffolded |
+| `title-missing` | warning | `title` is empty | ✅ defaults to the id basename |
+| `description-missing` | warning | `description` is empty (drives progressive disclosure) | ❌ needs your input |
+| `tags-not-array` | warning | `tags` isn't a string array | ✅ normalized to `string[]` |
+| `body-empty` | warning | markdown body is empty | ❌ needs your input |
+
+`okf_validate` never writes files. To repair, run the `okf_write` commands it emits — each uses `mode: "update"`, so only the listed field changes and everything else is preserved. Issues marked ❌ require content the validator can't fabricate, so they appear as templates with a `<placeholder>` for you to fill in.
 
 ## Install (local development)
 
@@ -179,7 +212,7 @@ No special configuration is required to run both.
 
 ```bash
 bun install
-bun test            # 31 tests across core / messages / write / integration
+bun test            # 49 tests across core / messages / write / validate / integration
 bunx tsc --noEmit   # type-check
 ```
 
@@ -207,9 +240,10 @@ src/
   state.ts        in-memory bundle cache + per-session unload/nudge state
   registry.ts     bundle/concept resolution, placeholders, glob matching
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
-  tools.ts        the 5 okf_* tools
+  tools.ts        the 6 okf_* tools (incl. okf_validate)
+  validate.ts     concept-level validation rules (pure; used by okf_validate)
   messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
-tests/            core, messages (unload/dedup/nudge), write, integration
+tests/            core, messages (unload/dedup/nudge), write, validate, integration
 fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 .opencode/plugin/okf.ts   local-dev re-export so the plugin loads in this repo
 ```
@@ -219,6 +253,7 @@ fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 - No LLM-generated summaries (OKF's `description` is the deterministic summary).
 - No "strong"/blocking nudge tier (only soft).
 - No Attested Computation execution.
+- Validation is **concept-level only** (frontmatter `type`/`title`/`description`/`tags` + body). Bundle-structure checks (root `index.md` `okf_version`, `log.md` presence, cross-link integrity) are out of scope — those belong with the authoring-focused `opencode-okf` package.
 - Not yet published to npm (the layout is publish-ready; run `bun run build` / add a build step before publishing).
 
 ## License
