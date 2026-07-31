@@ -91,7 +91,7 @@ opencode
 `.opencode/plugin/okf.ts` re-exports `src/index.ts`. Verify registration with:
 
 ```bash
-opencode debug agent build | grep okf   # -> okf_list/read/search/write/unload: true
+opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
 ```
 
 ## Install
@@ -106,7 +106,7 @@ A fully bundled, zero-dependency `okf.js` is the simplest form for restricted ne
 mkdir -p ~/.config/opencode/plugin          # global (all projects)
 tar -xzf opencode-okf-context-0.1.0-offline.tar.gz -C ~/.config/opencode/plugin okf.js
 # or, per-project: .opencode/plugin/okf.js
-opencode debug agent build | grep okf       # verify the 5 tools registered
+opencode debug agent build | grep okf       # verify the 6 tools registered
 ```
 
 To build the offline file yourself from this repo:
@@ -212,7 +212,7 @@ No special configuration is required to run both.
 
 ```bash
 bun install
-bun test            # 49 tests across core / messages / write / validate / integration
+bun test            # 54 tests across core / messages / write / validate / search / integration
 bunx tsc --noEmit   # type-check
 ```
 
@@ -243,7 +243,7 @@ src/
   tools.ts        the 6 okf_* tools (incl. okf_validate)
   validate.ts     concept-level validation rules (pure; used by okf_validate)
   messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
-tests/            core, messages (unload/dedup/nudge), write, validate, integration
+tests/            core, messages (unload/dedup/nudge), write, validate, search, integration
 fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 .opencode/plugin/okf.ts   local-dev re-export so the plugin loads in this repo
 ```

@@ -91,7 +91,7 @@ opencode
 `.opencode/plugin/okf.ts` 重新导出 `src/index.ts`。用下面的命令验证注册：
 
 ```bash
-opencode debug agent build | grep okf   # -> okf_list/read/search/write/unload: true
+opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
 ```
 
 ## 安装
@@ -106,7 +106,7 @@ opencode 会自动加载其插件目录下的任意 `*.js` / `*.ts` 文件。提
 mkdir -p ~/.config/opencode/plugin          # 全局（对所有项目生效）
 tar -xzf opencode-okf-context-0.1.0-offline.tar.gz -C ~/.config/opencode/plugin okf.js
 # 或按项目安装：放到对应项目的 .opencode/plugin/okf.js
-opencode debug agent build | grep okf       # 验证 5 个工具已注册
+opencode debug agent build | grep okf       # 验证 6 个工具已注册
 ```
 
 自行从本仓库构建离线文件：
@@ -212,7 +212,7 @@ opencode-okf 与 DCP 可以干净地共存——它们处理的是不同对象�
 
 ```bash
 bun install
-bun test            # 49 个测试：core / messages / write / validate / integration
+bun test            # 54 个测试：core / messages / write / validate / search / integration
 bunx tsc --noEmit   # 类型检查
 ```
 
@@ -242,7 +242,7 @@ src/
   tools.ts        6 个 okf_* 工具（含 okf_validate）
   validate.ts     概念级校验规则（纯函数，供 okf_validate 使用）
   messages.ts     出站变换：去重 + 自动/手动卸载 + 软提醒
-tests/            core、messages（卸载/去重/提醒）、write、validate、integration
+tests/            core、messages（卸载/去重/提醒）、write、validate、search、integration
 fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfood 与测试
 .opencode/plugin/okf.ts   本地开发用的重导出，让插件在本仓库内加载
 ```
