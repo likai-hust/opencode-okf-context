@@ -58,9 +58,15 @@ export function renderManifest(bundles: Bundle[], maxChars: number): string {
   const lines: string[] = [
     "# OKF knowledge bundles available",
     "",
-    "Knowledge is loaded progressively: browse the index with okf_list, then load a full",
-    "concept with okf_read. Loaded concepts are auto-unloaded after a few turns to keep",
-    "the context lean — call okf_unload to release them sooner, or okf_read again to reload.",
+    "When the user asks to look up, read, or explain knowledge, documentation, concepts,",
+    "tables, metrics, or any domain knowledge in this project, you MUST prefer the OKF tools",
+    "below over generic file tools (read/glob/grep). Browse the index with okf_list first,",
+    "then load a concept with okf_read. Only fall back to read/glob/grep if the topic is",
+    "clearly NOT covered by the bundles listed here.",
+    "",
+    "Knowledge is loaded progressively: okf_list shows titles + descriptions only (cheap);",
+    "okf_read loads the full text. Loaded concepts are auto-unloaded after a few turns to",
+    "keep the context lean — call okf_unload to release them sooner, or okf_read to reload.",
     "",
   ];
   let budget = maxChars - lines.join("\n").length;
