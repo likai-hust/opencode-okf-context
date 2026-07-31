@@ -40,7 +40,7 @@ L2 全文（按需，体积大，有生命周期）
 |---|---|---|
 | `okf_list` | `bundle?`、`path?` | 某个 bundle 或子目录的索引（仅标题 + 描述） |
 | `okf_read` | `id`、`bundle?` | concept 的完整 markdown + 末尾一行"用完请 okf_unload"引导 |
-| `okf_search` | `query`、`bundle?`、`maxResults?` | 命中的 concept 引用 + 一行片段，绝不返回全文 |
+| `okf_search` | `query`、`bundle?`、`maxResults?` | 先搜元数据（title/description/tags）；仅当元数据无匹配时才回退搜正文。返回精简引用 + 一行片段，绝不返回全文 |
 | `okf_write` | `id`、`type?`、`title?`、`description?`、`tags?`、`body?`、`bundle?`、`mode?` | 新建/更新 concept。`update` 模式（默认）下只改传入的字段，其余从磁盘保留——可只修一个字段而无需重述整篇文档。更新父级 `index.md`；按日期头前置写入 `log.md` |
 | `okf_validate` | `id?` 或 `all: true`、`bundle?` | 只读校验报告（仅概念级规则）；每个问题附带一条可直接运行的 `okf_write(...)` 修复命令 |
 | `okf_unload` | `id?` 或 `all: true`、`bundle?` | 标记 concept 立即卸载；返回操作结果 |

@@ -40,7 +40,7 @@ Protection: the `keepRecent` most recent reads are never auto-unloaded; `protect
 |---|---|---|
 | `okf_list` | `bundle?`, `path?` | a bundle / sub-directory index (titles + descriptions only) |
 | `okf_read` | `id`, `bundle?` | the full concept markdown + a footer reminding the model to unload when done |
-| `okf_search` | `query`, `bundle?`, `maxResults?` | matched concept refs + a snippet line, never full bodies |
+| `okf_search` | `query`, `bundle?`, `maxResults?` | searches metadata first (title/description/tags); falls back to body only when metadata matches nothing. Returns concise refs + a snippet, never full bodies |
 | `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates/updates a concept. In `update` mode (default) only passed fields change — others are preserved from disk, so you can fix one field without restating the whole doc. Updates the parent `index.md`; prepends to `log.md` |
 | `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level rules); each issue comes with a ready-to-run `okf_write(...)` fix command |
 | `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload; reports the action |

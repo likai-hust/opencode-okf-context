@@ -92,7 +92,7 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_search: tool({
       description:
-        "Keyword search across an OKF bundle's concepts. Matches title, description, tags and body. Returns concise matches (path + title: description + a line snippet), NOT full documents — use okf_read on a matched id to load the full text. Args: query, bundle (optional), maxResults (default 10).",
+        "Keyword search across an OKF bundle's concepts. Searches METADATA first (title + description + tags) — the cheap, index-level fields — and only falls back to the BODY when metadata yields no matches, so full text is scanned only as a last resort. Each hit is tagged with its match tier. Returns concise matches (path + title: description + a snippet), NOT full documents — use okf_read on a matched id to load the full text. Args: query, bundle (optional), maxResults (default 10).",
       args: {
         query: tool.schema.string().describe("Search term (case-insensitive)."),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit to search all bundles."),
@@ -106,20 +106,50 @@ export function buildTools(cfg: OkfConfig) {
         }
         const q = args.query.toLowerCase();
         const limit = args.maxResults ?? 10;
-        const hits: string[] = [];
+
+        // Pass 1: metadata only (title/description/tags) across all concepts in scope.
+        // This is the progressive-disclosure preference — search the cheap index fields first.
+        const metaHits: Array<{ bundle: Bundle; concept: Concept; hit: SearchHit }> = [];
+        const remaining: Array<{ bundle: Bundle; concept: Concept }> = [];
         for (const b of scope) {
           for (const c of b.concepts.values()) {
-            const snippet = matchSnippet(c, q);
-            if (snippet) {
-              const file = relPathFor(c, context.directory);
-              hits.push(`- [${b.name}] ${describeConcept(c)}  (file: ${file})  → okf_read(id: "${c.id}", bundle: "${b.name}")\n    ${snippet}`);
-              if (hits.length >= limit) break;
+            const hit = matchMetadata(c, q);
+            if (hit) {
+              metaHits.push({ bundle: b, concept: c, hit });
+              if (metaHits.length >= limit) break;
+            } else {
+              remaining.push({ bundle: b, concept: c });
             }
           }
-          if (hits.length >= limit) break;
+          if (metaHits.length >= limit) break;
         }
-        if (hits.length === 0) return `No matches for "${args.query}".`;
-        return `${hits.length} match${hits.length === 1 ? "" : "es"} for "${args.query}":\n\n${hits.join("\n")}\n`;
+
+        // If metadata matched enough, return those without scanning any body.
+        if (metaHits.length >= limit) {
+          return formatSearchHits(args.query, metaHits.slice(0, limit), false, context.directory);
+        }
+
+        // Pass 2 (fallback): metadata found some but fewer than `limit`; top up by scanning
+        // bodies of the concepts that did NOT match metadata.
+        const bodyHits: Array<{ bundle: Bundle; concept: Concept; hit: SearchHit }> = [];
+        let needed = limit - metaHits.length;
+        if (needed > 0) {
+          for (const { bundle, concept } of remaining) {
+            const hit = matchBody(concept, q);
+            if (hit) {
+              bodyHits.push({ bundle, concept, hit });
+              needed--;
+              if (needed <= 0) break;
+            }
+          }
+        }
+
+        const all = [...metaHits, ...bodyHits];
+        if (all.length === 0) return `No matches for "${args.query}".`;
+
+        // Report whether a body fallback occurred, so the caller knows full text was scanned.
+        const fellBack = bodyHits.length > 0;
+        return formatSearchHits(args.query, all, fellBack, context.directory);
       },
     }),
 
@@ -412,22 +442,71 @@ function isReservedId(id: string): boolean {
   return base.toLowerCase() === "index" || base.toLowerCase() === "log";
 }
 
-/** Return a one-line snippet around the first match, or undefined if no match. */
-function matchSnippet(c: import("./types.js").Concept, q: string): string | undefined {
-  const haystacks = [
-    c.title ?? "",
-    c.description ?? "",
-    (c.tags ?? []).join(" "),
-    c.body,
+/** Where a search match came from: metadata (cheap) vs body (fallback). */
+type MatchTier = "metadata" | "body";
+
+/** A single search hit with its tier and a one-line snippet. */
+interface SearchHit {
+  tier: MatchTier;
+  snippet: string;
+}
+
+/**
+ * Search a concept's METADATA only (title + description + tags).
+ * Progressive disclosure prefers this: metadata is small, already parsed, and meant to be
+ * surfaced before the (large) body. Returns the matched field as the snippet, or undefined.
+ */
+function matchMetadata(c: import("./types.js").Concept, q: string): SearchHit | undefined {
+  const meta: Array<[string, string]> = [
+    ["title", c.title ?? ""],
+    ["description", c.description ?? ""],
+    ["tags", (c.tags ?? []).join(" ")],
   ];
-  const joined = haystacks.join("\n").toLowerCase();
-  const idx = joined.indexOf(q);
+  for (const [field, value] of meta) {
+    const lower = value.toLowerCase();
+    const idx = lower.indexOf(q);
+    if (idx !== -1) {
+      const snippet = value.trim().length > 0 ? `…${value.trim()}…` : "";
+      return { tier: "metadata", snippet: `[metadata: ${field}] ${snippet}`.trim() };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Search a concept's BODY as a fallback (only when metadata yielded nothing).
+ * Returns a one-line snippet around the first match, or undefined.
+ */
+function matchBody(c: import("./types.js").Concept, q: string): SearchHit | undefined {
+  const lower = c.body.toLowerCase();
+  const idx = lower.indexOf(q);
   if (idx === -1) return undefined;
-  // Find which line the match is on (in the body) for a nicer snippet.
-  const lineStart = joined.lastIndexOf("\n", idx) + 1;
-  const lineEnd = joined.indexOf("\n", idx);
-  const snippet = joined.slice(lineStart, lineEnd === -1 ? lineStart + 120 : lineEnd).trim();
-  return snippet.length > 0 ? `…${snippet}…` : undefined;
+  const lineStart = c.body.lastIndexOf("\n", idx) + 1;
+  const lineEnd = c.body.indexOf("\n", idx);
+  const snippet = c.body.slice(lineStart, lineEnd === -1 ? lineStart + 120 : lineEnd).trim();
+  if (snippet.length === 0) return undefined;
+  return { tier: "body", snippet: `[body] …${snippet}…` };
+}
+
+/**
+ * Render search hits as the tool's text output. Metadata hits are listed first, body hits
+ * after. A header notes when a body fallback occurred (full text was scanned).
+ */
+function formatSearchHits(
+  query: string,
+  hits: Array<{ bundle: Bundle; concept: Concept; hit: SearchHit }>,
+  fellBack: boolean,
+  projectDir: string,
+): string {
+  const lines: string[] = [];
+  const scope = `${hits.length} match${hits.length === 1 ? "" : "es"} for "${query}"`;
+  const note = fellBack ? " (metadata match first; body fallback used for the rest)" : " (metadata match only — body not scanned)";
+  lines.push(`${scope}${note}:`, "");
+  for (const { bundle, concept, hit } of hits) {
+    lines.push(`- [${bundle.name}] ${describeConcept(concept)}  (file: ${relPathFor(concept, projectDir)})  → okf_read(id: "${concept.id}", bundle: "${bundle.name}")`);
+    lines.push(`    ${hit.snippet}`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 /** Update the parent directory's index.md: ensure an entry for this concept exists. */
