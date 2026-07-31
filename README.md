@@ -2,9 +2,13 @@
 
 English | [简体中文](./README.zh-CN.md)
 
+[![npm version](https://img.shields.io/npm/v/opencode-okf-context)](https://www.npmjs.com/package/opencode-okf-context) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 An [OpenCode](https://opencode.ai) plugin that brings **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog) knowledge bundles — so your agent can read a whole knowledge base without permanently bloating its context window.
 
 It is directly inspired by [opencode-dynamic-context-pruning (DCP)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning): like DCP, it never mutates the real session history and only rewrites the message history *on the way to the LLM*. But where DCP prunes generic stale content via LLM-generated summaries, opencode-okf exploits OKF's native structure (YAML frontmatter `description`, `index.md`) to do **deterministic**, zero-extra-token disclosure and unloading.
+
+> **Not a memory plugin.** This is a **knowledge-access** plugin: it reads *author-curated* OKF bundles, with deterministic disclosure + unload as the superpower — query a huge knowledge base without permanently occupying the context window. It does **not** record conversations, summarize sessions, or auto-generate memories. If you want the agent to remember past chats, use a memory plugin instead (e.g. `echoes-vault-opencode`); if you want to query a curated knowledge base cheaply, you're in the right place.
 
 ## How it works
 
@@ -264,7 +268,7 @@ fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 - No "strong"/blocking nudge tier (only soft).
 - No Attested Computation execution.
 - Validation covers **concept-level** rules (frontmatter `type`/`title`/`description`/`tags` + body) and, via `okf_validate(all:true)`, **bundle-level** checks (root `index.md` `okf_version`, `log.md` presence, broken cross-links). Cross-link *integrity repair* (rewriting dangling links) is out of scope — those belong with the authoring-focused `opencode-okf` package.
-- Not yet published to npm (the layout is publish-ready; run `bun run build` / add a build step before publishing).
+- Published on [npm](https://www.npmjs.com/package/opencode-okf-context) as `opencode-okf-context` — install with `opencode plugin opencode-okf-context@latest --global`.
 
 ## License
 

@@ -4,7 +4,15 @@
   "description": "OpenCode plugin: progressive disclosure + auto-unload for OKF (Open Knowledge Format) knowledge bundles. Inspired by DCP's outbound-only context transformation.",
   "type": "module",
   "license": "MIT",
-  "author": "",
+  "author": "likai-hust",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/likai-hust/opencode-okf-context.git"
+  },
+  "homepage": "https://github.com/likai-hust/opencode-okf-context#readme",
+  "bugs": {
+    "url": "https://github.com/likai-hust/opencode-okf-context/issues"
+  },
   "keywords": [
     "opencode",
     "opencode-plugin",

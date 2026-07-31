@@ -2,9 +2,13 @@
 
 [English](./README.md) | 简体中文
 
+[![npm version](https://img.shields.io/npm/v/opencode-okf-context)](https://www.npmjs.com/package/opencode-okf-context) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 一个 [OpenCode](https://opencode.ai) 插件，为 [OKF（开放知识格式，Open Knowledge Format）](https://github.com/GoogleCloudPlatform/knowledge-catalog) 知识包提供**渐进式披露**与**用完即卸**能力——让 AI agent 能读取整座知识库，却不会把上下文窗口撑爆。
 
 设计直接借鉴了 [opencode-dynamic-context-pruning (DCP)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning)：和 DCP 一样，它**永不修改真实会话历史**，只在消息发往 LLM 的途中重写。但 DCP 用 LLM 生成的摘要来剪枝通用内容，而本插件利用 OKF 原生的结构（YAML frontmatter 的 `description`、`index.md`）做**确定性、零额外 token** 的披露与卸载。
+
+> **它不是记忆插件。** 本插件是**知识访问**插件：读取*人工维护*的 OKF 知识包，核心能力是确定性披露 + 用完即卸——查询再大的知识库，也不会长期占用上下文窗口。它**不**记录对话、不总结会话、不自动生成记忆。如果你要的是"让 agent 记住之前的聊天"，请改用记忆类插件（如 `echoes-vault-opencode`）；如果你要的是"低成本查询经过整理的权威知识库"，这里就是对的。
 
 ## 它如何工作
 
@@ -263,7 +267,7 @@ fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfoo
 - 不做 "strong"/阻断式提醒分层（v1 仅 soft）。
 - 不实现 Attested Computation（证明计算）执行。
 - 校验覆盖**概念级**规则（frontmatter 的 `type`/`title`/`description`/`tags` + 正文），并通过 `okf_validate(all:true)` 覆盖 **bundle 级**检查（根 `index.md` 的 `okf_version`、`log.md` 是否存在、断裂的交叉链接）。交叉链接的*完整性修复*（重写失效链接）不在范围内——那属于专注创作的 `opencode-okf` 包。
-- 已具备发布结构，但尚未发布到 npm（运行 `bun run build` 后即可发布）。
+- 已发布到 [npm](https://www.npmjs.com/package/opencode-okf-context)：包名 `opencode-okf-context`，安装：`opencode plugin opencode-okf-context@latest --global`。
 
 ## 许可证
 
