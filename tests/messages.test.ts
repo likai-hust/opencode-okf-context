@@ -197,3 +197,35 @@ test("nudge injects soft reminder above threshold, throttled", () => {
   const text = lastUser.parts.find((p) => p.type === "text") as Extract<Part, { type: "text" }>;
   expect(text.text).toContain("okf_unload");
 });
+
+/** force: "strong" must produce a directive tone, distinct from the "soft" suggestion. */
+function runNudge(force: "soft" | "strong", sessionID = "s1"): string {
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    unload: { ...DEFAULT_CONFIG.unload, afterTurns: 99 },
+    nudge: { ...DEFAULT_CONFIG.nudge, threshold: 10, frequency: 3, force },
+  };
+  const bundles = [makeBundle("b", [{ id: "big" }])];
+  const big = "Y".repeat(200);
+  const input = {
+    messages: [userMsg(sessionID), assistantMsg(sessionID, [readToolPart("big", "b", big, sessionID)]), userMsg(sessionID)],
+  };
+  transformOutbound(input, cfg, bundles, sessionID);
+  const lastUser = input.messages[2]!;
+  const text = lastUser.parts.find((p) => p.type === "text") as Extract<Part, { type: "text" }>;
+  return text.text;
+}
+
+test('force: "soft" vs "strong" produce distinct nudge tones', () => {
+  // Separate sessions so each nudge's throttle counter is independent.
+  const soft = runNudge("soft", "s-soft");
+  const strong = runNudge("strong", "s-strong");
+  // Both still carry the unload guidance marker.
+  expect(soft).toContain("okf_unload");
+  expect(strong).toContain("okf_unload");
+  // The two tones must differ (regression guard for the dead-ternary bug).
+  expect(soft).not.toEqual(strong);
+  // soft = suggestion ("consider"); strong = directive (no "consider").
+  expect(soft).toContain("consider unloading");
+  expect(strong).not.toContain("consider unloading");
+});

@@ -60,7 +60,7 @@
         "enabled": { "type": "boolean", "default": true },
         "threshold": { "type": "integer", "default": 6000, "minimum": 0, "description": "Total chars of loaded-and-not-unloaded concepts above which a nudge is injected." },
         "frequency": { "type": "integer", "default": 3, "minimum": 1, "description": "Inject the nudge at most once every N user messages." },
-        "force": { "type": "string", "enum": ["soft", "strong"], "default": "soft" }
+        "force": { "type": "string", "enum": ["soft", "strong"], "default": "soft", "description": "Nudge tone. \"soft\" = a gentle suggestion; \"strong\" = a directive that frames unloading as a context-quality necessity." }
       }
     },
     "write": {

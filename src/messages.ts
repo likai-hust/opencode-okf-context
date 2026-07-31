@@ -290,11 +290,16 @@ function injectNudge(input: TransformInput, retainedChars: number, force: string
     }
   }
 
-  const intensity = force === "strong" ? "consider unloading" : "consider unloading";
+  // "soft" = a suggestion; "strong" = a directive (free context now).
+  const directive = force === "strong";
+  const lead = directive ? "unload" : "consider unloading";
+  const urgency = directive
+    ? " To keep the context lean and avoid quality degradation, unload concepts you are done with"
+    : " If you are done using some of it";
   const line =
     `\n\n${NUDGE_TAG}\n(okf) You currently have ~${Math.round(retainedChars)} chars of OKF knowledge ` +
-    `loaded in context. If you are done using some of it, ${intensity} those concepts with ` +
-    `okf_unload to keep the context lean. Use okf_list/okf_read again to reload.`;
+    `loaded in context.${urgency}, ${lead} those concepts with ` +
+    `okf_unload. Use okf_list/okf_read again to reload.`;
 
   if (textPart) {
     // Strip a previously injected nudge first.

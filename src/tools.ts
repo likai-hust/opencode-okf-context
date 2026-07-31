@@ -130,7 +130,7 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_search: tool({
       description:
-        "Keyword search across an OKF bundle's concepts. Searches METADATA first (title + description + tags) — the cheap, index-level fields — and only falls back to the BODY when metadata yields no matches, so full text is scanned only as a last resort. Each hit is tagged with its match tier. Returns concise matches (path + title: description + a snippet), NOT full documents — use okf_read on a matched id to load the full text. Args: query, bundle (optional), maxResults (default 10).",
+        'THE entry point when you hear a term and want to find what the knowledge base says about it — e.g. the user says "我想了解 customer churn", or you hit "active_customers" in code and aren\'t sure what it means. Keyword search across OKF concepts: metadata first (title/description/tags), body only as fallback. Returns path + snippet per hit, NOT full text — call okf_read on a matched id to load it. Args: query, bundle?(omit to search all), maxResults?(default 10).',
       args: {
         query: tool.schema.string().describe("Search term (case-insensitive)."),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit to search all bundles."),

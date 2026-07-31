@@ -1,5 +1,5 @@
 /**
- * Tests for the v0.1.2 robustness + validation enhancements:
+ * Tests for the v0.1.3 robustness + validation enhancements:
  *  H1  malformed YAML frontmatter must not break bundle discovery, and okf_validate
  *      reports it as yaml-error.
  *  H2  bundle-root heuristic: a dir with index.md/log.md + a typed concept is accepted
