@@ -100,11 +100,11 @@ opencode auto-loads any `*.js`/`*.ts` file placed in its plugin directories. Thr
 
 ### Option 1: offline / air-gapped (single self-contained file)
 
-A fully bundled, zero-dependency `okf.js` is the simplest form for restricted networks. Grab the offline bundle (`opencode-okf-context-0.1.0-offline.tar.gz`) or build it, then drop the file into opencode's plugin directory:
+A fully bundled, zero-dependency `okf.js` is the simplest form for restricted networks. Grab the offline bundle from the [latest release](https://github.com/likai-hust/opencode-okf-context/releases) (e.g. `opencode-okf-context-0.1.1-offline.tar.gz`) or build it, then drop the file into opencode's plugin directory:
 
 ```bash
 mkdir -p ~/.config/opencode/plugin          # global (all projects)
-tar -xzf opencode-okf-context-0.1.0-offline.tar.gz -C ~/.config/opencode/plugin okf.js
+tar -xzf opencode-okf-context-0.1.1-offline.tar.gz -C ~/.config/opencode/plugin okf.js
 # or, per-project: .opencode/plugin/okf.js
 opencode debug agent build | grep okf       # verify the 6 tools registered
 ```
@@ -223,7 +223,7 @@ loads the real plugin entry and exercises the hooks + tools end-to-end without a
 
 ```bash
 bun run build       # tsup bundles JS (yaml already bundled) + tsc emits d.ts
-npm pack            # produces opencode-okf-context-0.1.0.tgz
+npm pack            # produces opencode-okf-context-0.1.1.tgz
 npm publish         # publish to npm (npm login first)
 ```
 
