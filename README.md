@@ -4,11 +4,11 @@ English | [简体中文](./README.zh-CN.md)
 
 [![npm version](https://img.shields.io/npm/v/opencode-okf-context)](https://www.npmjs.com/package/opencode-okf-context) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-An [OpenCode](https://opencode.ai) plugin that brings **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog) knowledge bundles — so your agent can read a whole knowledge base without permanently bloating its context window.
+An [OpenCode](https://opencode.ai) plugin that gives [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog) knowledge bundles **progressive disclosure** and **use-and-unload** semantics — so an agent can read a whole knowledge base without permanently bloating its context window.
 
-It is directly inspired by [opencode-dynamic-context-pruning (DCP)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning): like DCP, it never mutates the real session history and only rewrites the message history *on the way to the LLM*. But where DCP prunes generic stale content via LLM-generated summaries, opencode-okf exploits OKF's native structure (YAML frontmatter `description`, `index.md`) to do **deterministic**, zero-extra-token disclosure and unloading.
+Inspired by [DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning): like DCP it rewrites message history only *on the way to the LLM* and never mutates the real session. But instead of LLM-summarized pruning, it exploits OKF's native structure (YAML `description`, `index.md`) for **deterministic, zero-extra-token** disclosure and unloading.
 
-> **Not a memory plugin.** This is a **knowledge-access** plugin: it reads *author-curated* OKF bundles, with deterministic disclosure + unload as the superpower — query a huge knowledge base without permanently occupying the context window. It does **not** record conversations, summarize sessions, or auto-generate memories. If you want the agent to remember past chats, use a memory plugin instead (e.g. `echoes-vault-opencode`); if you want to query a curated knowledge base cheaply, you're in the right place.
+> **Not a memory plugin.** This is a **knowledge-access** plugin: it reads *author-curated* OKF bundles, cheaply querying a large knowledge base without permanently occupying context. It does **not** record conversations or auto-generate memories — for that, use a memory plugin (e.g. `echoes-vault-opencode`).
 
 ## How it works
 
@@ -28,15 +28,15 @@ unload: full text → placeholder
     Reload with okf_read(id: \"tables/customers\")."
 ```
 
-Three mechanisms, borrowed from / complementary to DCP:
+Three mechanisms:
 
 | mechanism | what happens |
 |---|---|
-| **deterministic unload** | a loaded concept's `okf_read` output is replaced by a compact placeholder (title + type + description) once enough turns pass, or on explicit `okf_unload`. No LLM summarization call. |
-| **deduplication** | if the same concept is read twice, only the latest full text survives; earlier reads collapse to a "deduplicated" placeholder. |
-| **soft nudge** | when retained OKF content exceeds a threshold, a one-line reminder is anchored onto the last user message (never a new message), throttled by message count. |
+| **deterministic unload** | a loaded concept's `okf_read` output becomes a compact placeholder (title + type + description) after enough turns, or on explicit `okf_unload`. No LLM call. |
+| **deduplication** | the same concept read twice keeps only the latest full text; earlier reads collapse to a "deduplicated" placeholder. |
+| **soft nudge** | when retained OKF content exceeds a threshold, a one-line reminder is anchored onto the last user message (never a new message). |
 
-Protection: the `keepRecent` most recent reads are never auto-unloaded; `protectedConcepts` globs are never unloaded; explicit `okf_unload` always wins.
+Protection: the `keepRecent` most recent reads and `protectedConcepts` globs are never auto-unloaded; explicit `okf_unload` always wins. All rewriting is outbound-only — the real history is never mutated.
 
 ## Tools
 
@@ -44,131 +44,48 @@ Protection: the `keepRecent` most recent reads are never auto-unloaded; `protect
 |---|---|---|
 | `okf_list` | `bundle?`, `path?` | a bundle / sub-directory index (titles + descriptions only) |
 | `okf_read` | `id` or `ids: [...]`, `bundle?` | the full concept markdown (one, or a batch loaded as a unit) + a footer reminding the model to unload when done |
-| `okf_search` | `query`, `bundle?`, `maxResults?` | searches metadata first (title/description/tags); falls back to body only when metadata matches nothing. Returns concise refs + a snippet, never full bodies |
-| `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates/updates/deletes a concept. In `update` mode (default) only passed fields change — others are preserved from disk. `mode:"delete"` removes the file, its `index.md` entry, and logs it. Updates the parent `index.md`; prepends to `log.md` |
-| `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level rules; with `all:true` also bundle-level: `okf_version`, `log.md`, broken cross-links); each issue comes with a ready-to-run `okf_write(...)` fix command |
-| `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload; reports the action |
+| `okf_search` | `query`, `bundle?`, `maxResults?` | searches metadata first (title/description/tags), body only as a fallback; returns concise refs + a snippet, never full bodies |
+| `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates / updates / deletes a concept. `update` (default) changes only passed fields; `delete` removes the file, its `index.md` entry, and logs it |
+| `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level; `all:true` adds bundle-level); each issue comes with a ready-to-run `okf_write(...)` fix command |
+| `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload |
 
-### Validation & repair
-
-`okf_validate` checks each concept against the OKF concept rules and reports issues with severity + a fix command:
+`okf_validate` checks each concept against OKF rules and emits a fix command per issue — it never writes files; run the `okf_write` commands it suggests:
 
 ```
 ✓ Validated 3 concept(s) in bundle "demo": 1 valid, 2 with issues (1 error, 3 warnings).
-
-▶ tables/bad_tags  (bundle: demo, 2 issues)
-  ⚠ [warning] title: `title` is missing; defaulting to the concept id "bad_tags".
-    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", title: "bad_tags")
-  ⚠ [warning] tags: `tags` is "core" (string); it should be an array of strings.
-    → fix: okf_write(id: "tables/bad_tags", bundle: "demo", mode: "update", tags: ["core"])
 
 ▶ tables/bad_type  (bundle: demo, 2 issues)
   ✗ [error] type: `type` is missing or empty. The OKF spec requires `type` …
     → fix: okf_write(id: "tables/bad_type", bundle: "demo", mode: "update", type: "<your type, …>")
 ```
 
-Rules (concept-level only):
-
-| code | severity | fires when | auto-fixable? |
-|---|---|---|---|
-| `type-missing` | error | `type` is empty (spec's only hard requirement) | ❌ needs your input |
-| `type-not-string` | warning | `type` isn't a string | ✅ coerced to `String(type)` |
-| `frontmatter-missing` | error | no `---` block at all | ✅ scaffolded |
-| `title-missing` | warning | `title` is empty | ✅ defaults to the id basename |
-| `description-missing` | warning | `description` is empty (drives progressive disclosure) | ❌ needs your input |
-| `tags-not-array` | warning | `tags` isn't a string array | ✅ normalized to `string[]` |
-| `body-empty` | warning | markdown body is empty | ❌ needs your input |
-
-With `all: true`, bundle-level rules are also checked:
-
-| code | severity | fires when | auto-fixable? |
-|---|---|---|---|
-| `bundle-okf-version-missing` | error | root `index.md` doesn't declare `okf_version` | ✅ edit `index.md` frontmatter |
-| `bundle-log-missing` | warning | no `log.md` at the bundle root | ✅ create `log.md` |
-| `link-broken` | warning | a concept's cross-link points at a non-existent file | ❌ needs your input |
-
-`okf_validate` never writes files. To repair, run the `okf_write` commands it emits — each uses `mode: "update"`, so only the listed field changes and everything else is preserved. Issues marked ❌ require content the validator can't fabricate, so they appear as templates with a `<placeholder>` for you to fill in.
-
-Malformed YAML in a concept's frontmatter no longer breaks discovery: the concept loads with an empty frontmatter and `okf_validate` reports a `yaml-error` so you can fix it. Auto-scan also accepts a bundle whose root `index.md` skips `okf_version` (spec says MAY) as long as the dir has an `index.md`/`log.md` plus at least one typed concept.
-
-## Install (local development)
-
-opencode auto-loads `.opencode/plugin/*.ts` in a project, so this repo dogfoods itself:
-
-```bash
-cd opencode-okf-context
-bun install
-# The sample bundle at fixtures/sample-bundle is auto-discovered.
-opencode
-```
-
-`.opencode/plugin/okf.ts` re-exports `src/index.ts`. Verify registration with:
-
-```bash
-opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
-```
+Checks: frontmatter `type`/`title`/`description`/`tags` + body (concept-level); `okf_version`, `log.md`, and broken cross-links (bundle-level, via `all:true`). Malformed YAML in a concept no longer breaks discovery — it loads with empty frontmatter and surfaces as a `yaml-error`.
 
 ## Install
 
-opencode auto-loads any `*.js`/`*.ts` file placed in its plugin directories. Three ways to install:
-
-### Option 1: offline / air-gapped (single self-contained file)
-
-A fully bundled, zero-dependency `okf.js` is the simplest form for restricted networks. Grab the offline bundle from the [latest release](https://github.com/likai-hust/opencode-okf-context/releases) (e.g. `opencode-okf-context-0.1.2-offline.tar.gz`) or build it, then drop the file into opencode's plugin directory:
-
-```bash
-mkdir -p ~/.config/opencode/plugin          # global (all projects)
-tar -xzf opencode-okf-context-0.1.2-offline.tar.gz -C ~/.config/opencode/plugin okf.js
-# or, per-project: .opencode/plugin/okf.js
-opencode debug agent build | grep okf       # verify the 6 tools registered
-```
-
-To build the offline file yourself from this repo:
-
-```bash
-cd opencode-okf-context
-bun install
-bun run build        # produces dist/index.js (everything bundled: yaml, @opencode-ai/* )
-cp dist/index.js ~/.config/opencode/plugin/okf.js
-```
-
-Upgrade = overwrite `okf.js` and restart opencode. Uninstall = delete the file.
-
-### Option 2: from npm
+Published on [npm](https://www.npmjs.com/package/opencode-okf-context) as `opencode-okf-context`:
 
 ```bash
 opencode plugin opencode-okf-context@latest --global
 ```
 
-or add to `~/.config/opencode/opencode.json`:
+or add it to `~/.config/opencode/opencode.json`:
 
 ```json
 { "plugin": ["opencode-okf-context@latest"] }
 ```
 
-### Option 3: from a local directory (dev/debug)
+Verify the 6 tools registered:
 
-Point the `plugin` array at this repo — opencode runs `.ts` via Bun, so edits take effect on restart:
-
-```jsonc
-// ~/.config/opencode/opencode.json
-{ "plugin": ["/absolute/path/to/opencode-okf-context"] }
+```bash
+opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
 ```
 
-> The repo ships with `.opencode/plugin/okf.ts` re-exporting `src/index.ts` — point `plugin` at the repo root and opencode auto-discovers it, no extra config needed.
-
-### A note on the package name
-
-There is a separate, community-published `opencode-okf` package focused on **authoring & validating** OKF bundles (`/okf-create`, `/okf-validate`, …). This plugin (`opencode-okf-context`) is complementary — it handles **reading & context management**. The two can be installed together without conflict.
+> **Package name:** there's a separate community `opencode-okf` package for *authoring & validating* OKF bundles. This plugin (`opencode-okf-context`) is complementary — it handles *reading & context management*. Both install together without conflict.
 
 ## Configuration
 
-Layered, DCP-style. Later layers override earlier (deep-merged):
-
-1. `~/.config/opencode/okf.jsonc` (global)
-2. `$OPENCODE_CONFIG_DIR/okf.jsonc` (if set)
-3. `<project>/.opencode/okf.jsonc` (project)
-4. plugin options from `opencode.json` (`["opencode-okf-context", {...}]`) — highest precedence
+Layered (deep-merged; later layers override earlier): `~/.config/opencode/okf.jsonc` → `$OPENCODE_CONFIG_DIR/okf.jsonc` → `<project>/.opencode/okf.jsonc` → plugin options in `opencode.json`. Full schema: [`okf.schema.json`](./okf.schema.json).
 
 ```jsonc
 // .opencode/okf.jsonc
@@ -189,86 +106,29 @@ Layered, DCP-style. Later layers override earlier (deep-merged):
 }
 ```
 
-Full schema: [`okf.schema.json`](./okf.schema.json).
-
-### Config reference
-
-| field | default | description |
-|---|---|---|
-| `enabled` | `true` | master switch for the plugin |
-| `scan.enabled` | `true` | auto-scan the project root to discover bundles |
-| `scan.maxDepth` | `4` | max directory depth for auto-scan |
-| `bundles` | `[]` | explicitly declared bundles, merged with scan results (config wins on conflict) |
-| `disclosure.injectManifest` | `true` | inject the L0 manifest into the system prompt |
-| `disclosure.maxManifestChars` | `2000` | char cap for the injected manifest |
-| `unload.afterTurns` | `2` | auto-unload after this many user turns since load |
-| `unload.keepRecent` | `1` | never auto-unload the N most recent reads |
-| `unload.placeholder` | `"description"` | placeholder verbosity: `description` (title + description) or `minimal` (reload hint only) |
-| `nudge.threshold` | `6000` | soft-nudge when retained OKF content exceeds this many chars |
-| `nudge.frequency` | `3` | inject the nudge at most once every N user messages |
-| `write.enabled` | `true` | enable `okf_write` |
-| `write.updateIndex` | `true` | update the parent `index.md` when writing a concept |
-| `write.appendLog` | `true` | prepend to `log.md` under today's ISO date heading when writing a concept |
-| `protectedConcepts` | `[]` | concept id globs never auto-unloaded (e.g. `tables/*`) |
-| `debug` | `false` | log unload/dedup/nudge actions to stderr |
-
-## Coexisting with DCP
-
-opencode-okf and DCP compose cleanly — they touch different things:
-
-- DCP prunes generic stale tool outputs / message ranges (with LLM summaries).
-- opencode-okf only rewrites its own `okf_read` outputs, into tiny deterministic placeholders.
-- An unloaded placeholder is already small, so DCP has nothing further to compress there.
-
-No special configuration is required to run both.
-
 ## Development
 
 ```bash
 bun install
-bun test            # 67 tests across core / messages / write / validate / search / robustness / integration
+bun test            # 67 tests
 bunx tsc --noEmit   # type-check
 ```
 
-Test fixtures live in [`fixtures/sample-bundle`](./fixtures/sample-bundle). The integration test
-loads the real plugin entry and exercises the hooks + tools end-to-end without an opencode server.
+The repo dogfoods itself via `.opencode/plugin/okf.ts` (re-exports `src/index.ts`) — running `opencode` here loads the plugin from source and auto-discovers `fixtures/sample-bundle`. See [AGENTS.md](./AGENTS.md) for the full architecture map.
 
 ## Build & publish
 
 ```bash
-bun run build       # tsup bundles JS (yaml already bundled) + tsc emits d.ts
-npm pack            # produces opencode-okf-context-0.1.2.tgz
-npm publish         # publish to npm (npm login first)
+bun run build       # tsup bundles JS (yaml bundled) + tsc emits d.ts
+npm publish         # npm login first
 ```
 
-Build output lives in `dist/`. `@opencode-ai/plugin` is a peerDependency provided by the opencode runtime, so the package itself has zero external runtime dependencies.
-
-## Project layout
-
-```
-src/
-  index.ts        plugin entry: wires discovery + tools + transform hooks
-  discovery.ts    bundle scanning & OKF concept parsing
-  frontmatter.ts  YAML frontmatter split / serialize
-  config.ts       layered okf.jsonc loading (JSONC strip + deep merge)
-  state.ts        in-memory bundle cache + per-session unload/nudge state
-  registry.ts     bundle/concept resolution, placeholders, glob matching
-  indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
-  tools.ts        the 6 okf_* tools (incl. okf_validate)
-  validate.ts     concept- + bundle-level validation rules + link extraction (pure)
-  messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
-tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration
-fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
-.opencode/plugin/okf.ts   local-dev re-export so the plugin loads in this repo
-```
+`@opencode-ai/plugin` is a peerDependency provided by the opencode runtime, so the package has zero external runtime dependencies.
 
 ## Scope / non-goals (v1)
 
-- No LLM-generated summaries (OKF's `description` is the deterministic summary).
-- No "strong"/blocking nudge tier (only soft).
-- No Attested Computation execution.
-- Validation covers **concept-level** rules (frontmatter `type`/`title`/`description`/`tags` + body) and, via `okf_validate(all:true)`, **bundle-level** checks (root `index.md` `okf_version`, `log.md` presence, broken cross-links). Cross-link *integrity repair* (rewriting dangling links) is out of scope — those belong with the authoring-focused `opencode-okf` package.
-- Published on [npm](https://www.npmjs.com/package/opencode-okf-context) as `opencode-okf-context` — install with `opencode plugin opencode-okf-context@latest --global`.
+- No LLM-generated summaries (OKF's `description` is the deterministic summary); only soft nudge.
+- Validation covers concept- and bundle-level checks; cross-link *repair* is out of scope (belongs with `opencode-okf`).
 
 ## License
 
