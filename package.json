@@ -18,9 +18,13 @@
     "opencode-plugin",
     "okf",
     "open-knowledge-format",
-    "knowledge",
-    "context",
-    "progressive-disclosure"
+    "progressive-disclosure",
+    "context-management",
+    "context-window",
+    "knowledge-management",
+    "knowledge-base",
+    "llm",
+    "agent"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
