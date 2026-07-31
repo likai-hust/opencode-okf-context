@@ -18,8 +18,8 @@ import type { Concept } from "./types.js";
 export interface ValidationIssue {
   /** How severe: "error" blocks spec compliance; "warning" is advisory. */
   severity: "error" | "warning";
-  /** The frontmatter key or "body" / "frontmatter" the issue concerns. */
-  field: "type" | "title" | "description" | "tags" | "frontmatter" | "body";
+  /** The frontmatter key or "body" / "frontmatter" / "yaml" / "bundle" the issue concerns. */
+  field: "type" | "title" | "description" | "tags" | "frontmatter" | "body" | "yaml" | "bundle";
   /** Stable machine code identifying the rule that fired. */
   code: ValidationCode;
   /** Human-readable explanation (shown in the validate report). */
@@ -37,13 +37,17 @@ export interface ValidationIssue {
 
 /** All validation rule codes. */
 export type ValidationCode =
+  | "yaml-error"
   | "frontmatter-missing"
   | "type-missing"
   | "type-not-string"
   | "title-missing"
   | "description-missing"
   | "tags-not-array"
-  | "body-empty";
+  | "body-empty"
+  | "bundle-okf-version-missing"
+  | "bundle-log-missing"
+  | "link-broken";
 
 /**
  * Validate a single parsed concept against the OKF concept rules.
@@ -61,6 +65,17 @@ export type ValidationCode =
  */
 export function validateConcept(c: Concept): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+
+  // --- malformed YAML frontmatter ---
+  if (c.yamlError) {
+    issues.push({
+      severity: "error",
+      field: "yaml",
+      code: "yaml-error",
+      message: `YAML frontmatter could not be parsed: ${c.yamlError}. Fix the frontmatter block (fields are currently ignored).`,
+      autoFixable: false,
+    });
+  }
 
   // --- frontmatter presence ---
   if (Object.keys(c.frontmatter).length === 0 && c.body.trim().length === 0) {
@@ -194,4 +209,116 @@ export function summarize(issues: ValidationIssue[]): { errors: number; warnings
     else warnings++;
   }
   return { errors, warnings };
+}
+
+// ---------------------------------------------------------------------
+// Bundle-level validation (pure parts)
+// ---------------------------------------------------------------------
+
+/**
+ * Extract markdown links from a concept body and normalize them to bundle-relative
+ * POSIX paths (keeping the `.md` suffix, e.g. "tables/orders.md").
+ *
+ * Rules:
+ *  - Absolute bundle paths (leading "/") are resolved against the bundle root.
+ *  - Relative paths are resolved against the concept's own directory.
+ *  - External links (http/https/mailto), anchors (#...), auto-links (<...>) and images
+ *    (![...]) are skipped.
+ *
+ * The caller (tools.ts) checks whether the target actually exists, keeping this pure.
+ */
+export function extractLinks(body: string, conceptId: string): string[] {
+  const out: string[] = [];
+  const re = /!?\[[^\]]*\]\(([^)]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const raw = m[1]!.trim();
+    if (m[0]!.startsWith("!")) continue; // image
+    if (/^(https?:|mailto:|ftp:)/i.test(raw)) continue; // external
+    if (raw.startsWith("#")) continue; // anchor
+    if (raw.startsWith("<") && raw.endsWith(">")) continue; // auto-link
+    if (raw.includes("://")) continue; // any other scheme
+    let p = raw.split("#")[0]!; // strip fragment
+    p = p.split("?")[0]!; // strip query
+    if (!p) continue;
+    let resolved: string;
+    if (p.startsWith("/")) {
+      // Bundle-absolute: strip leading slash.
+      resolved = p.replace(/^\/+/, "");
+    } else {
+      // Relative to the concept's directory.
+      const dir = conceptId.includes("/") ? conceptId.slice(0, conceptId.lastIndexOf("/")) : "";
+      resolved = dir ? `${dir}/${p}` : p;
+    }
+    // Resolve "." / ".." segments so "../c.md" inside tables/sub becomes "tables/c.md",
+    // and a target escaping the bundle root is dropped (not a valid cross-link).
+    const norm = normalizePathSegments(resolved);
+    if (norm) out.push(norm);
+  }
+  return out;
+}
+
+/** Resolve "." and ".." segments in a POSIX path; returns undefined if it escapes root. */
+function normalizePathSegments(p: string): string | undefined {
+  const segs = p.split("/");
+  const out: string[] = [];
+  for (const seg of segs) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length === 0) return undefined; // escapes the bundle root
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return out.length > 0 ? out.join("/") : undefined;
+}
+
+/**
+ * Validate the bundle-root index.md frontmatter (okf_version). Returns an issue or
+ * undefined when OK. `okf_version` is a MAY per spec §12, but this plugin relies on it
+ * for auto-scan, so its absence is an error with an auto-fixable suggestion.
+ */
+export function validateBundleIndex(frontmatter: Record<string, unknown>): ValidationIssue | undefined {
+  if (frontmatter.okf_version === undefined) {
+    return {
+      severity: "error",
+      field: "bundle",
+      code: "bundle-okf-version-missing",
+      message:
+        'Root index.md does not declare `okf_version`. Add `okf_version: "0.2"` to its frontmatter so auto-scan recognizes this bundle.',
+      autoFixable: true,
+      suggested: { okf_version: "0.2" },
+    };
+  }
+  return undefined;
+}
+
+/** Validate that a log.md exists at the bundle root. Returns an issue or undefined. */
+export function validateBundleLog(hasLog: boolean): ValidationIssue | undefined {
+  if (!hasLog) {
+    return {
+      severity: "warning",
+      field: "bundle",
+      code: "bundle-log-missing",
+      message: "No log.md at the bundle root. A changelog is recommended for tracking bundle edits.",
+      autoFixable: true,
+      suggested: { create: "log.md" },
+    };
+  }
+  return undefined;
+}
+
+/** Build the fix command for a bundle-level issue (used by okf_validate). */
+export function bundleIssueFix(bundleName: string, issue: ValidationIssue): string {
+  const head = `okf_write(id: "log", bundle: "${bundleName}", mode: "update"`;
+  switch (issue.code) {
+    case "bundle-okf-version-missing":
+      // okf_write can't touch index.md (reserved); instruct via a Read/Edit note instead.
+      return `edit <bundle>/index.md: add \`okf_version: "0.2"\` to its frontmatter`;
+    case "bundle-log-missing":
+      return `${head}, body: "# Changelog")`;
+    default:
+      return "";
+  }
 }

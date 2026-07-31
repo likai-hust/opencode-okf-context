@@ -13,6 +13,8 @@ export interface SplitDoc {
   body: string;
   /** Whether the source started with a frontmatter block. */
   hasFrontmatter: boolean;
+  /** YAML parse error message, when the frontmatter block is malformed (frontmatter is {}) . */
+  yamlError?: string;
 }
 
 const DELIM = "---";
@@ -27,13 +29,21 @@ export function splitFrontmatter(raw: string): SplitDoc {
   const fmText = m[1] ?? "";
   const body = raw.slice(m[0].length);
   let frontmatter: Record<string, unknown> = {};
+  let yamlError: string | undefined;
   if (fmText.trim().length > 0) {
-    const parsed = parse(fmText);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      frontmatter = parsed as Record<string, unknown>;
+    try {
+      const parsed = parse(fmText);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        frontmatter = parsed as Record<string, unknown>;
+      }
+    } catch (e) {
+      // Malformed YAML: never throw — degrade to empty frontmatter and surface the error
+      // via yamlError so okf_validate can report it (a single bad file must not break
+      // discovery of the whole bundle).
+      yamlError = e instanceof Error ? e.message : String(e);
     }
   }
-  return { frontmatter, body, hasFrontmatter: true };
+  return { frontmatter, body, hasFrontmatter: true, yamlError };
 }
 
 /** Coerce an unknown frontmatter value into a plain string for display. */

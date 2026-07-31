@@ -40,8 +40,10 @@ interface ReadSlot {
   partIndex: number;
   callID: string;
   bundle: string | undefined;
-  id: string; // normalized concept id
-  key: string; // bundle::id
+  id: string; // normalized concept id (first id for batch reads)
+  key: string; // bundle::id (first id for batch reads)
+  /** All concept ids for a batch read (ids:[...]); empty for single reads. */
+  batchIds: string[];
   output: string;
   outputChars: number;
 }
@@ -93,7 +95,7 @@ export function transformOutbound(
       // the model explicitly asked to release this concept.
       if (state.isUnloaded(sessionID, s.key)) {
         const freed = s.outputChars;
-        replaceOutput(input, s, placeholderText(cfg, bundles, s.bundle, s.id, freed));
+        replaceOutput(input, s, placeholderText(cfg, bundles, s, freed));
         unloaded++;
         continue;
       }
@@ -103,7 +105,7 @@ export function transformOutbound(
       const turnsSince = turnsSinceLoad(input, s.msgIndex, turnOf);
       if (turnsSince >= cfg.unload.afterTurns) {
         const freed = s.outputChars;
-        replaceOutput(input, s, placeholderText(cfg, bundles, s.bundle, s.id, freed));
+        replaceOutput(input, s, placeholderText(cfg, bundles, s, freed));
         unloaded++;
       }
     }
@@ -146,8 +148,30 @@ function collectReadSlots(input: TransformInput): ReadSlot[] {
       const st = part.state as ToolStateCompleted;
       const bundleRaw = st.input?.bundle;
       const idRaw = st.input?.id;
-      if (typeof idRaw !== "string") continue;
+      const idsRaw = st.input?.ids;
       const bundle = typeof bundleRaw === "string" ? bundleRaw : undefined;
+
+      // Batch read (ids:[...]): track as one slot keyed by its first id; unload replaces
+      // the whole batch output. Concept-level dedup is intentionally not applied to batches.
+      if (Array.isArray(idsRaw)) {
+        const ids = idsRaw.filter((v): v is string => typeof v === "string").map(normalizeId);
+        if (ids.length === 0) continue;
+        const id = ids[0]!;
+        slots.push({
+          msgIndex: mi,
+          partIndex: pi,
+          callID: part.callID,
+          bundle,
+          id,
+          key: bundle ? `${bundle}::${id}` : `::${id}`,
+          batchIds: ids,
+          output: st.output,
+          outputChars: st.output.length,
+        });
+        continue;
+      }
+
+      if (typeof idRaw !== "string") continue;
       const id = normalizeId(idRaw);
       slots.push({
         msgIndex: mi,
@@ -156,6 +180,7 @@ function collectReadSlots(input: TransformInput): ReadSlot[] {
         bundle,
         id,
         key: bundle ? `${bundle}::${id}` : `::${id}`,
+        batchIds: [],
         output: st.output,
         outputChars: st.output.length,
       });
@@ -172,21 +197,26 @@ function replaceOutput(input: TransformInput, s: ReadSlot, text: string): void {
   (part.state as ToolStateCompleted).output = text;
 }
 
-/** Build the placeholder for a given concept (description or minimal mode). */
+/** Build the placeholder for a read slot (single concept, or a whole batch). */
 function placeholderText(
   cfg: OkfConfig,
   bundles: Bundle[],
-  bundleName: string | undefined,
-  id: string,
+  s: ReadSlot,
   freedChars: number,
 ): string {
-  const found = resolveConcept(bundles, id, bundleName);
-  const bName = found?.bundle.name ?? bundleName ?? "?";
+  // Batch read: unload the whole batch as one unit, listing every concept.
+  if (s.batchIds.length > 0) {
+    const bName = s.bundle ?? bundles[0]?.name ?? "?";
+    const reloads = s.batchIds.map((id) => `okf_read(ids: ["${id}"], bundle: "${bName}")`).join("; ");
+    return `[OKF] batch of ${s.batchIds.length} concepts unloaded — ~${Math.round(freedChars)} chars freed. Reload with ${reloads}.`;
+  }
+  const found = resolveConcept(bundles, s.id, s.bundle);
+  const bName = found?.bundle.name ?? s.bundle ?? "?";
   if (found) {
     return placeholderFor(bName, found.concept, cfg.unload.placeholder, freedChars);
   }
   // Concept no longer resolvable (deleted?) — minimal placeholder.
-  return `[OKF] concept "${id}"${bundleName ? ` (${bundleName})` : ""} unloaded — ~${Math.round(freedChars)} chars freed. Reload with okf_read(id: "${id}").`;
+  return `[OKF] concept "${s.id}"${s.bundle ? ` (${s.bundle})` : ""} unloaded — ~${Math.round(freedChars)} chars freed. Reload with okf_read(id: "${s.id}").`;
 }
 
 /** Is this concept protected by the protectedConcepts globs? */

@@ -23,6 +23,8 @@ export interface Concept {
   frontmatter: Record<string, unknown>;
   /** The markdown body (everything after the frontmatter). */
   body: string;
+  /** YAML parse error message when the frontmatter block is malformed (frontmatter is {}). */
+  yamlError?: string;
   /** Frontmatter convenience fields. `type` is required by the spec but we tolerate absence. */
   type: string | undefined;
   title: string | undefined;

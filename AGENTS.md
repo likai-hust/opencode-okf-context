@@ -28,7 +28,7 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 49 tests across core / messages / write / validate / integration
+bun test            # 67 tests across core / messages / write / validate / search / robustness / integration
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
 npm pack            # produces opencode-okf-context-0.1.1.tgz
@@ -48,9 +48,9 @@ src/
   registry.ts     bundle/concept resolution, placeholders, glob matching (pure, dependency-free)
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
   tools.ts        the 6 okf_* tools (list/read/search/write/validate/unload)
-  validate.ts     concept-level validation rules (pure; used by okf_validate)
+  validate.ts     concept- + bundle-level validation rules + link extraction (pure)
   messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
-tests/            core, messages (unload/dedup/nudge), write, validate, integration
+tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration
 fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 .opencode/plugin/okf.ts   local-dev re-export so the plugin dogfoods in this repo
 ```
@@ -70,10 +70,10 @@ history is untouched.
 | tool | purpose |
 |---|---|
 | `okf_list` | browse a bundle/sub-directory index (titles + descriptions only) |
-| `okf_read` | load a full concept; footer reminds to unload when done |
-| `okf_search` | keyword search; returns snippet refs, never full bodies |
-| `okf_write` | create/update a concept. **`update` mode = partial update** (only passed fields change) |
-| `okf_validate` | read-only concept validation; emits ready-to-run `okf_write` fix commands |
+| `okf_read` | load one concept, or a batch via `ids` (unloads as a unit); footer reminds to unload |
+| `okf_search` | metadata-first keyword search (title/description/tags), body only as fallback |
+| `okf_write` | create/update/delete a concept. **`update` = partial update** (only passed fields change); **`delete`** removes file + index entry + logs it |
+| `okf_validate` | read-only validation; concept-level rules + (all:true) bundle-level (okf_version/log/links); emits ready-to-run `okf_write` fix commands |
 | `okf_unload` | release concept(s) from context immediately |
 
 ## OKF format essentials (v0.2)
@@ -88,12 +88,15 @@ Per the [official SPEC](https://github.com/GoogleCloudPlatform/knowledge-catalog
 - **`okf_version`** — a bundle-root `index.md` **MAY** declare it (spec says MAY, optional). ⚠️ But
   this plugin's *auto-scan* treats it as the marker for recognizing a bundle root (see caveat below).
 
-### ⚠️ Known design caveat: bundle-root detection
+### Bundle-root detection heuristic
 
-Auto-scan (`discovery.ts` `isBundleRoot`) only accepts a directory whose root `index.md` declares
-`okf_version`. This is **stricter than the spec** (which makes it optional), chosen to avoid
-mis-classifying ordinary markdown projects. Consequence: a spec-valid bundle without `okf_version`
-won't be auto-discovered. Users can work around it via explicit `bundles` config in `okf.jsonc`.
+Auto-scan (`discovery.ts` `isBundleRoot`) accepts a directory when either:
+1. its root `index.md` declares `okf_version` (spec §12 marker), **OR**
+2. it has an `index.md` or `log.md` AND at least one concept with a `type` key.
+
+Condition 2 was added to honor the spec's MAY-level `okf_version` (previously a spec-valid bundle
+without it wasn't auto-discovered). Ordinary markdown projects (no index/log/typed concepts) are
+still not mis-classified; edge cases can always be declared via explicit `bundles` config.
 
 ## Key conventions (follow these when editing)
 

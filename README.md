@@ -39,10 +39,10 @@ Protection: the `keepRecent` most recent reads are never auto-unloaded; `protect
 | tool | args | returns |
 |---|---|---|
 | `okf_list` | `bundle?`, `path?` | a bundle / sub-directory index (titles + descriptions only) |
-| `okf_read` | `id`, `bundle?` | the full concept markdown + a footer reminding the model to unload when done |
+| `okf_read` | `id` or `ids: [...]`, `bundle?` | the full concept markdown (one, or a batch loaded as a unit) + a footer reminding the model to unload when done |
 | `okf_search` | `query`, `bundle?`, `maxResults?` | searches metadata first (title/description/tags); falls back to body only when metadata matches nothing. Returns concise refs + a snippet, never full bodies |
-| `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates/updates a concept. In `update` mode (default) only passed fields change — others are preserved from disk, so you can fix one field without restating the whole doc. Updates the parent `index.md`; prepends to `log.md` |
-| `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level rules); each issue comes with a ready-to-run `okf_write(...)` fix command |
+| `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates/updates/deletes a concept. In `update` mode (default) only passed fields change — others are preserved from disk. `mode:"delete"` removes the file, its `index.md` entry, and logs it. Updates the parent `index.md`; prepends to `log.md` |
+| `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level rules; with `all:true` also bundle-level: `okf_version`, `log.md`, broken cross-links); each issue comes with a ready-to-run `okf_write(...)` fix command |
 | `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload; reports the action |
 
 ### Validation & repair
@@ -75,7 +75,17 @@ Rules (concept-level only):
 | `tags-not-array` | warning | `tags` isn't a string array | ✅ normalized to `string[]` |
 | `body-empty` | warning | markdown body is empty | ❌ needs your input |
 
+With `all: true`, bundle-level rules are also checked:
+
+| code | severity | fires when | auto-fixable? |
+|---|---|---|---|
+| `bundle-okf-version-missing` | error | root `index.md` doesn't declare `okf_version` | ✅ edit `index.md` frontmatter |
+| `bundle-log-missing` | warning | no `log.md` at the bundle root | ✅ create `log.md` |
+| `link-broken` | warning | a concept's cross-link points at a non-existent file | ❌ needs your input |
+
 `okf_validate` never writes files. To repair, run the `okf_write` commands it emits — each uses `mode: "update"`, so only the listed field changes and everything else is preserved. Issues marked ❌ require content the validator can't fabricate, so they appear as templates with a `<placeholder>` for you to fill in.
+
+Malformed YAML in a concept's frontmatter no longer breaks discovery: the concept loads with an empty frontmatter and `okf_validate` reports a `yaml-error` so you can fix it. Auto-scan also accepts a bundle whose root `index.md` skips `okf_version` (spec says MAY) as long as the dir has an `index.md`/`log.md` plus at least one typed concept.
 
 ## Install (local development)
 
@@ -212,7 +222,7 @@ No special configuration is required to run both.
 
 ```bash
 bun install
-bun test            # 54 tests across core / messages / write / validate / search / integration
+bun test            # 67 tests across core / messages / write / validate / search / robustness / integration
 bunx tsc --noEmit   # type-check
 ```
 
@@ -241,9 +251,9 @@ src/
   registry.ts     bundle/concept resolution, placeholders, glob matching
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
   tools.ts        the 6 okf_* tools (incl. okf_validate)
-  validate.ts     concept-level validation rules (pure; used by okf_validate)
+  validate.ts     concept- + bundle-level validation rules + link extraction (pure)
   messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
-tests/            core, messages (unload/dedup/nudge), write, validate, search, integration
+tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration
 fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 .opencode/plugin/okf.ts   local-dev re-export so the plugin loads in this repo
 ```
@@ -253,7 +263,7 @@ fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 - No LLM-generated summaries (OKF's `description` is the deterministic summary).
 - No "strong"/blocking nudge tier (only soft).
 - No Attested Computation execution.
-- Validation is **concept-level only** (frontmatter `type`/`title`/`description`/`tags` + body). Bundle-structure checks (root `index.md` `okf_version`, `log.md` presence, cross-link integrity) are out of scope — those belong with the authoring-focused `opencode-okf` package.
+- Validation covers **concept-level** rules (frontmatter `type`/`title`/`description`/`tags` + body) and, via `okf_validate(all:true)`, **bundle-level** checks (root `index.md` `okf_version`, `log.md` presence, broken cross-links). Cross-link *integrity repair* (rewriting dangling links) is out of scope — those belong with the authoring-focused `opencode-okf` package.
 - Not yet published to npm (the layout is publish-ready; run `bun run build` / add a build step before publishing).
 
 ## License

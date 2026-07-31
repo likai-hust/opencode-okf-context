@@ -2,9 +2,10 @@
  * Bundle discovery: scan a project root for OKF bundles and parse concepts.
  *
  * A directory is treated as a bundle root if it matches any of:
- *  1. It contains a root `index.md` with an `okf_version` frontmatter key, OR
- *  2. It contains an `index.md` or `log.md` AND at least one other `.md` with a `type`
- *     frontmatter key, OR
+ *  1. It contains a root `index.md` with an `okf_version` frontmatter key (spec §12), OR
+ *  2. It contains an `index.md` or `log.md` AND at least one `.md` with a `type`
+ *     frontmatter key (the spec's `okf_version` is a MAY — bundles that don't declare it
+ *     but still look like knowledge bundles are accepted heuristically), OR
  *  3. It is explicitly declared in the user's `bundles` config.
  *
  * All filesystem traversal is kept in `discoverBundles`; pure concept parsing lives in
@@ -58,7 +59,7 @@ export function conceptIdFromRelPath(relPath: string): string {
 /** Read & parse a single concept file into a Concept object. */
 export async function parseConcept(absPath: string, root: string): Promise<Concept> {
   const raw = await readFile(absPath, "utf8");
-  const { frontmatter, body } = splitFrontmatter(raw);
+  const { frontmatter, body, yamlError } = splitFrontmatter(raw);
   const relPath = toPosix(relative(root, absPath));
   const id = conceptIdFromRelPath(relPath);
   return {
@@ -67,6 +68,7 @@ export async function parseConcept(absPath: string, root: string): Promise<Conce
     relPath,
     frontmatter,
     body,
+    yamlError,
     type: asString(frontmatter.type),
     title: asString(frontmatter.title),
     description: asString(frontmatter.description),
@@ -90,6 +92,8 @@ interface ScanHit {
   indexDirs: Set<string>; // relative dir paths that contain an index.md
   hasLog: boolean;
   conceptCount: number;
+  /** Number of concepts whose frontmatter declares a `type` (bundle heuristic). */
+  typedConceptCount: number;
 }
 
 /** Scan a candidate directory recursively, collecting markdown files & reserved markers. */
@@ -98,6 +102,7 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
   const indexDirs = new Set<string>();
   let hasLog = false;
   let conceptCount = 0;
+  let typedConceptCount = 0;
 
   async function walk(current: string, depth: number): Promise<void> {
     if (depth > maxDepth) return;
@@ -124,32 +129,46 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
         if (isConceptFile(entry.name)) {
           files.push(full);
           conceptCount++;
+          // Peek at the frontmatter `type` key for the bundle-root heuristic.
+          try {
+            const { frontmatter } = splitFrontmatter(await readFile(full, "utf8"));
+            if (asString(frontmatter.type) !== undefined) typedConceptCount++;
+          } catch {
+            /* unreadable file: skip */
+          }
         }
       }
     }
   }
 
   await walk(dir, 0);
-  return { root: dir, files, indexDirs, hasLog, conceptCount };
+  return { root: dir, files, indexDirs, hasLog, conceptCount, typedConceptCount };
 }
 
 /**
  * Heuristic: is `dir` an OKF bundle root?
  *
- * Auto-scan only accepts a directory whose **root index.md declares `okf_version`** — the
- * spec's standard way to mark a bundle. This keeps auto-scan from mis-classifying an
- * ordinary project root (which just happens to contain markdown) as a knowledge bundle.
- * Bundles that don't follow this convention should be declared explicitly via `bundles`.
+ * Accepted when either:
+ *  1. The root `index.md` declares `okf_version` (the spec's standard marker, §12), OR
+ *  2. The dir has an `index.md` or `log.md` AND at least one concept with a `type` key.
+ *
+ * Condition 2 keeps auto-scan from mis-classifying an ordinary project root (markdown that
+ * merely happens to exist) while still accepting bundles that follow the spec's MAY-level
+ * `okf_version` convention. Bundles that match neither should be declared explicitly via `bundles`.
  */
 async function isBundleRoot(hit: ScanHit): Promise<boolean> {
   if (hit.conceptCount === 0) return false;
-  if (!hit.indexDirs.has(".")) return false;
-  try {
-    const { frontmatter } = splitFrontmatter(await readFile(join(hit.root, "index.md"), "utf8"));
-    return indexDeclaresBundle(frontmatter);
-  } catch {
-    return false;
+  // Condition 1: root index.md declares okf_version.
+  if (hit.indexDirs.has(".")) {
+    try {
+      const { frontmatter } = splitFrontmatter(await readFile(join(hit.root, "index.md"), "utf8"));
+      if (indexDeclaresBundle(frontmatter)) return true;
+    } catch {
+      /* unreadable index.md: fall through to condition 2 */
+    }
   }
+  // Condition 2: index.md or log.md present AND at least one typed concept.
+  return (hit.indexDirs.size > 0 || hit.hasLog) && hit.typedConceptCount >= 1;
 }
 
 /** Build a Bundle object from a scanned root (parses all concepts). */

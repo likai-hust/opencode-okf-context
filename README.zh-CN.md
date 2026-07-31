@@ -39,10 +39,10 @@ L2 全文（按需，体积大，有生命周期）
 | 工具 | 参数 | 返回 |
 |---|---|---|
 | `okf_list` | `bundle?`、`path?` | 某个 bundle 或子目录的索引（仅标题 + 描述） |
-| `okf_read` | `id`、`bundle?` | concept 的完整 markdown + 末尾一行"用完请 okf_unload"引导 |
+| `okf_read` | `id` 或 `ids: [...]`、`bundle?` | concept 的完整 markdown（单个，或批量整体加载）+ 末尾一行"用完请 okf_unload"引导 |
 | `okf_search` | `query`、`bundle?`、`maxResults?` | 先搜元数据（title/description/tags）；仅当元数据无匹配时才回退搜正文。返回精简引用 + 一行片段，绝不返回全文 |
-| `okf_write` | `id`、`type?`、`title?`、`description?`、`tags?`、`body?`、`bundle?`、`mode?` | 新建/更新 concept。`update` 模式（默认）下只改传入的字段，其余从磁盘保留——可只修一个字段而无需重述整篇文档。更新父级 `index.md`；按日期头前置写入 `log.md` |
-| `okf_validate` | `id?` 或 `all: true`、`bundle?` | 只读校验报告（仅概念级规则）；每个问题附带一条可直接运行的 `okf_write(...)` 修复命令 |
+| `okf_write` | `id`、`type?`、`title?`、`description?`、`tags?`、`body?`、`bundle?`、`mode?` | 新建/更新/删除 concept。`update` 模式（默认）下只改传入的字段，其余从磁盘保留——可只修一个字段而无需重述整篇文档。`mode:"delete"` 删除文件、移除其 `index.md` 条目并记入 `log.md`。更新父级 `index.md`；按日期头前置写入 `log.md` |
+| `okf_validate` | `id?` 或 `all: true`、`bundle?` | 只读校验报告（概念级规则；`all:true` 时还含 bundle 级：`okf_version`、`log.md`、断裂的交叉链接）；每个问题附带一条可直接运行的 `okf_write(...)` 修复命令 |
 | `okf_unload` | `id?` 或 `all: true`、`bundle?` | 标记 concept 立即卸载；返回操作结果 |
 
 ### 校验与修复
@@ -75,7 +75,17 @@ L2 全文（按需，体积大，有生命周期）
 | `tags-not-array` | warning | `tags` 不是字符串数组 | ✅ 规范化为 `string[]` |
 | `body-empty` | warning | markdown 正文为空 | ❌ 需你输入 |
 
+使用 `all: true` 时还会检查 bundle 级规则：
+
+| code | 严重级别 | 触发条件 | 可自动修复？ |
+|---|---|---|---|
+| `bundle-okf-version-missing` | error | 根 `index.md` 未声明 `okf_version` | ✅ 编辑 `index.md` frontmatter |
+| `bundle-log-missing` | warning | bundle 根目录没有 `log.md` | ✅ 创建 `log.md` |
+| `link-broken` | warning | concept 的交叉链接指向不存在的文件 | ❌ 需你输入 |
+
 `okf_validate` 绝不写文件。修复时运行它给出的 `okf_write` 命令即可——每条都用 `mode: "update"`，只改列出的字段，其余原样保留。标 ❌ 的问题需要校验器无法编造的内容，因此以带 `<占位符>` 的模板形式给出，请你填入真实内容。
+
+concept 的 frontmatter 若 YAML 语法损坏，不再拖垮整个 bundle：该 concept 会以空 frontmatter 加载，`okf_validate` 会报告 `yaml-error` 供你修复。自动扫描也放宽了 bundle 识别：根 `index.md` 即使不写 `okf_version`（规范中是 MAY），只要目录里有 `index.md`/`log.md` 且至少一个带 `type` 的 concept，也会被识别。
 
 ## 安装（本地开发）
 
@@ -212,7 +222,7 @@ opencode-okf 与 DCP 可以干净地共存——它们处理的是不同对象�
 
 ```bash
 bun install
-bun test            # 54 个测试：core / messages / write / validate / search / integration
+bun test            # 67 个测试：core / messages / write / validate / search / robustness / integration
 bunx tsc --noEmit   # 类型检查
 ```
 
@@ -242,7 +252,7 @@ src/
   tools.ts        6 个 okf_* 工具（含 okf_validate）
   validate.ts     概念级校验规则（纯函数，供 okf_validate 使用）
   messages.ts     出站变换：去重 + 自动/手动卸载 + 软提醒
-tests/            core、messages（卸载/去重/提醒）、write、validate、search、integration
+tests/            core、messages（卸载/去重/提醒）、write、validate、search、robustness、integration
 fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfood 与测试
 .opencode/plugin/okf.ts   本地开发用的重导出，让插件在本仓库内加载
 ```
@@ -252,7 +262,7 @@ fixtures/sample-bundle/   一个含 3 个 concept 的 OKF 知识包，供 dogfoo
 - 不做 LLM 生成的摘要（OKF 的 `description` 就是确定性的摘要）。
 - 不做 "strong"/阻断式提醒分层（v1 仅 soft）。
 - 不实现 Attested Computation（证明计算）执行。
-- 校验**仅限概念级**（frontmatter 的 `type`/`title`/`description`/`tags` + 正文）。bundle 结构检查（根 `index.md` 的 `okf_version`、`log.md` 是否存在、交叉链接完整性）不在范围内——那些属于专注创作的 `opencode-okf` 包。
+- 校验覆盖**概念级**规则（frontmatter 的 `type`/`title`/`description`/`tags` + 正文），并通过 `okf_validate(all:true)` 覆盖 **bundle 级**检查（根 `index.md` 的 `okf_version`、`log.md` 是否存在、断裂的交叉链接）。交叉链接的*完整性修复*（重写失效链接）不在范围内——那属于专注创作的 `opencode-okf` 包。
 - 已具备发布结构，但尚未发布到 npm（运行 `bun run build` 后即可发布）。
 
 ## 许可证

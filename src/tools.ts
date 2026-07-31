@@ -11,7 +11,7 @@
  * messages-transform layer later replaces with placeholders — it is the only output we track.
  */
 import { readFile } from "node:fs/promises";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { tool } from "@opencode-ai/plugin";
 import { serializeDoc, splitFrontmatter } from "./frontmatter.js";
@@ -27,7 +27,15 @@ import {
 } from "./registry.js";
 import { state } from "./state.js";
 import { conceptKey } from "./registry.js";
-import { validateConcept, summarize, type ValidationIssue } from "./validate.js";
+import {
+  validateConcept,
+  summarize,
+  extractLinks,
+  validateBundleIndex,
+  validateBundleLog,
+  bundleIssueFix,
+  type ValidationIssue,
+} from "./validate.js";
 import type { OkfConfig } from "./config.js";
 import type { Bundle, Concept } from "./types.js";
 
@@ -72,16 +80,46 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_read: tool({
       description:
-        'Load the FULL markdown of an OKF concept into context. Only load what you actually need — loaded concepts occupy context until auto-unloaded (after a few turns) or until you call okf_unload. Args: id (concept path, e.g. "tables/customers"), bundle (name; omit if only one).',
+        'Load the FULL markdown of one or more OKF concepts into context. Only load what you actually need — loaded concepts occupy context until auto-unloaded (after a few turns) or until you call okf_unload. Pass id for a single concept, or ids (array) to load several at once (outputs are separated and the batch is tracked as a whole for unloading). Args: id (concept path, e.g. "tables/customers"), or ids ([...]), bundle (name; omit if only one). Provide exactly one of id / ids.',
       args: {
-        id: tool.schema.string().describe('Concept id, e.g. "tables/customers" (no leading slash, no .md).'),
+        id: tool.schema.string().optional().describe('Concept id, e.g. "tables/customers" (no leading slash, no .md). Mutually exclusive with ids.'),
+        ids: tool.schema.array(tool.schema.string()).optional().describe('Array of concept ids, e.g. ["tables/customers", "metrics/active_customers"]. Mutually exclusive with id.'),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
       },
       async execute(args, context) {
         const bundles = await requireBundles();
-        const found = resolveConcept(bundles, args.id, args.bundle);
+
+        if (args.id !== undefined && args.ids !== undefined) {
+          throw new Error('Pass either id or ids, not both.');
+        }
+        if (args.id === undefined && args.ids === undefined) {
+          throw new Error('Pass id (one concept) or ids (an array of concepts).');
+        }
+
+        if (args.ids !== undefined) {
+          if (args.ids.length === 0) throw new Error("ids must not be empty.");
+          const resolved: Array<{ bundle: Bundle; concept: Concept }> = [];
+          const missing: string[] = [];
+          for (const rawId of args.ids) {
+            const found = resolveConcept(bundles, rawId, args.bundle);
+            if (found) resolved.push(found);
+            else missing.push(normalizeId(rawId));
+          }
+          if (missing.length > 0) {
+            throw new Error(`Concept(s) not found: ${missing.join(", ")}${args.bundle ? ` in bundle ${args.bundle}` : ""}. Use okf_list to browse the index.`);
+          }
+          const parts = resolved.map(({ bundle, concept }) => {
+            const body = renderConceptFull(concept);
+            return readHeader(concept, context.directory) + body;
+          });
+          // One footer for the whole batch; unload treats the batch as a single unit.
+          const last = resolved[resolved.length - 1]!;
+          return parts.join("\n---\n") + readFooter(last.concept, last.bundle.name);
+        }
+
+        const found = resolveConcept(bundles, args.id!, args.bundle);
         if (!found) {
-          const id = normalizeId(args.id);
+          const id = normalizeId(args.id!);
           throw new Error(`Concept not found: ${id}${args.bundle ? ` in bundle ${args.bundle}` : ""}. Use okf_list to browse the index.`);
         }
         const { bundle, concept } = found;
@@ -155,7 +193,7 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_write: tool({
       description:
-        'Create or update an OKF concept document. Writes YAML frontmatter + body to <bundle>/<id>.md, updates the parent directory index.md entry, and prepends a log.md entry under today\'s date. In "update" mode (default), only the fields you pass are changed — others are read from disk and preserved, so you can fix a single field without restating the whole document. In "create" mode all provided fields are written fresh. Args: id, type? (required in create; optional in update), title?, description?, tags?, body? (required in create; optional in update), bundle?, mode ("create"|"update", default update).',
+        'Create, update, or delete an OKF concept document. Writes YAML frontmatter + body to <bundle>/<id>.md, updates the parent directory index.md entry, and prepends a log.md entry under today\'s date. In "update" mode (default), only the fields you pass are changed — others are read from disk and preserved, so you can fix a single field without restating the whole document. In "create" mode all provided fields are written fresh. In "delete" mode the concept file is removed, its index.md entry is dropped, and log.md records the deletion. Args: id, type? (required in create; optional in update), title?, description?, tags?, body? (required in create; optional in update), bundle?, mode ("create"|"update"|"delete", default update).',
       args: {
         id: tool.schema.string().describe('Concept id, e.g. "tables/new_table" (no leading slash, no .md).'),
         type: tool.schema.string().optional().describe('Concept type, e.g. "BigQuery Table", "Metric". Required when creating; optional when updating (omitted = keep current).'),
@@ -164,7 +202,7 @@ export function buildTools(cfg: OkfConfig) {
         tags: tool.schema.array(tool.schema.string()).optional().describe("Tags. Omit in update to keep current."),
         body: tool.schema.string().optional().describe("Markdown body of the concept. Required when creating; optional when updating (omitted = keep current)."),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
-        mode: tool.schema.enum(["create", "update"]).optional().describe('"create" fails if it exists; "update" (default) merges: only passed fields change, others are preserved from disk.'),
+        mode: tool.schema.enum(["create", "update", "delete"]).optional().describe('"create" fails if it exists; "update" (default) merges: only passed fields change, others are preserved from disk; "delete" removes the concept file, its index.md entry, and logs the deletion.'),
       },
       async execute(args) {
         if (!cfg.write.enabled) {
@@ -193,6 +231,39 @@ export function buildTools(cfg: OkfConfig) {
 
         if (mode === "create" && existed) {
           throw new Error(`Concept already exists: ${id} (mode was "create").`);
+        }
+
+        // --- Delete mode: remove file + index.md entry + log entry, refresh cache. ---
+        if (mode === "delete") {
+          if (!existed) {
+            const onDisk = await readFile(absPath, "utf8").catch(() => null);
+            existed = onDisk !== null;
+          }
+          if (!existed) {
+            throw new Error(`Concept not found: ${id} (nothing to delete).`);
+          }
+          await rm(absPath, { force: true });
+          bundle.concepts.delete(id);
+          state.markStale();
+
+          const sideEffects: string[] = [];
+          if (cfg.write.updateIndex) {
+            try {
+              await removeFromIndex(bundle, id);
+              sideEffects.push("parent index.md entry removed");
+            } catch {
+              /* best-effort */
+            }
+          }
+          if (cfg.write.appendLog) {
+            try {
+              await appendLog(bundle, `Deleted concept ${id}.`);
+              sideEffects.push("log.md appended");
+            } catch {
+              /* best-effort */
+            }
+          }
+          return `Deleted concept ${id} from bundle ${bundle.name}.\n${sideEffects.join("; ")}.\nFile removed: ${absPath}`;
         }
 
         // --- Resolve final frontmatter + body ---
@@ -275,11 +346,11 @@ export function buildTools(cfg: OkfConfig) {
 
     okf_validate: tool({
       description:
-        'Read-only validation of OKF concept documents against the concept-level rules (type required; type/title/description/tags well-formed; body non-empty). Does NOT write files. Returns a report listing issues per concept, each with a ready-to-run okf_write(...) fix command (auto-fixable issues are pre-filled; content issues like missing type/description show a placeholder). To actually fix an issue, call okf_write with mode:"update" passing only the changed field(s). Args: id (validate one concept), or bundle/all (validate a whole bundle). At least one of id / all must be given.',
+        'Read-only validation of OKF documents against concept-level rules (type required; type/title/description/tags well-formed; body non-empty) and, in all:true mode, bundle-level rules (root index.md okf_version, log.md presence, broken cross-links). Does NOT write files. Returns a report listing issues, each with a ready-to-run okf_write(...) fix command (auto-fixable issues are pre-filled; content issues show a placeholder). To actually fix an issue, call okf_write with mode:"update" passing only the changed field(s). Args: id (validate one concept), or bundle/all (validate a whole bundle, incl. bundle-level checks). At least one of id / all must be given.',
       args: {
         id: tool.schema.string().optional().describe('Concept id to validate, e.g. "tables/customers".'),
         bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
-        all: tool.schema.boolean().optional().describe("Validate every concept in the bundle (ignored if id is given)."),
+        all: tool.schema.boolean().optional().describe("Validate every concept in the bundle AND the bundle itself (ignored if id is given)."),
       },
       async execute(args) {
         const bundles = await requireBundles();
@@ -334,8 +405,43 @@ export function buildTools(cfg: OkfConfig) {
         const bundleLabel = scope.length === 1 ? scope[0]!.name : `${scope.length} bundles`;
         report.push(`Validated ${targets.length} concept(s) in ${bundleLabel}: ${validCount} valid, ${conceptsWithIssues.length} with issues (${totalErrors} error${totalErrors === 1 ? "" : "s"}, ${totalWarnings} warning${totalWarnings === 1 ? "" : "s"}).`);
 
-        if (conceptsWithIssues.length === 0) {
-          report.push("", "All validated concepts conform to the OKF concept rules. ✓");
+        // Bundle-level checks only in all:true mode (needs the full bundle context).
+        const bundleIssues: Array<{ bundle: Bundle; issues: ValidationIssue[] }> = [];
+        if (args.all) {
+          for (const b of scope) {
+            const issues: ValidationIssue[] = [];
+            // okf_version: read root index.md frontmatter.
+            try {
+              const idxRaw = await readFile(join(b.root, "index.md"), "utf8");
+              const { frontmatter } = splitFrontmatter(idxRaw);
+              const idxIssue = validateBundleIndex(frontmatter);
+              if (idxIssue) issues.push(idxIssue);
+            } catch {
+              // No root index.md at all: report okf_version missing (bundle not markable).
+              const idxIssue = validateBundleIndex({});
+              if (idxIssue) issues.push(idxIssue);
+            }
+            const logIssue = validateBundleLog(b.hasLog);
+            if (logIssue) issues.push(logIssue);
+            // Broken cross-links: check each concept's markdown links against the bundle.
+            for (const c of b.concepts.values()) {
+              const broken = checkBrokenLinks(b, c);
+              issues.push(...broken);
+            }
+            const { errors, warnings } = summarize(issues);
+            totalErrors += errors;
+            totalWarnings += warnings;
+            if (issues.length > 0) bundleIssues.push({ bundle: b, issues });
+          }
+        }
+
+        if (conceptsWithIssues.length === 0 && bundleIssues.length === 0) {
+          report.push(
+            "",
+            args.all
+              ? "All validated concepts and bundles conform to the OKF rules. ✓"
+              : "All validated concepts conform to the OKF concept rules. ✓",
+          );
           return report.join("\n") + "\n";
         }
 
@@ -345,6 +451,16 @@ export function buildTools(cfg: OkfConfig) {
             const icon = issue.severity === "error" ? "✗" : "⚠";
             report.push(`  ${icon} [${issue.severity}] ${issue.field}: ${issue.message}`);
             report.push(`    → fix: ${buildFixCommand(bundle.name, concept.id, issue)}`);
+          }
+        }
+
+        for (const { bundle, issues } of bundleIssues) {
+          report.push("", `▶ bundle "${bundle.name}"  (${issues.length} issue${issues.length === 1 ? "" : "s"})`);
+          for (const issue of issues) {
+            const icon = issue.severity === "error" ? "✗" : "⚠";
+            report.push(`  ${icon} [${issue.severity}] ${issue.field}: ${issue.message}`);
+            const fix = bundleIssueFix(bundle.name, issue);
+            if (fix) report.push(`    → fix: ${fix}`);
           }
         }
 
@@ -388,6 +504,29 @@ export function buildTools(cfg: OkfConfig) {
 }
 
 // ---------- helpers ----------
+
+/**
+ * Check a concept's markdown cross-links against the bundle: every link target (after
+ * normalization to a bundle-relative path) must resolve to an existing concept file or a
+ * reserved file (index.md / log.md). Returns one link-broken issue per dangling link.
+ */
+function checkBrokenLinks(bundle: Bundle, c: Concept): ValidationIssue[] {
+  const out: ValidationIssue[] = [];
+  for (const link of extractLinks(c.body, c.id)) {
+    const normalized = link.replace(/\.md$/i, "") || link;
+    const exists = bundle.concepts.has(normalized) || link.toLowerCase().endsWith("index.md") || link.toLowerCase().endsWith("log.md");
+    if (!exists) {
+      out.push({
+        severity: "warning",
+        field: "body",
+        code: "link-broken",
+        message: `Cross-link "${link}" does not resolve to any concept in this bundle.`,
+        autoFixable: false,
+      });
+    }
+  }
+  return out;
+}
 
 /**
  * Build a ready-to-run okf_write(...) command string for a validation issue.
@@ -546,6 +685,37 @@ async function updateParentIndex(
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Remove the index.md entry linking to a concept (inverse of updateParentIndex).
+ * Deletes any list line that links to `<basename>.md`; drops the file if it becomes empty.
+ */
+async function removeFromIndex(
+  bundle: import("./types.js").Bundle,
+  id: string,
+): Promise<void> {
+  const dirRel = id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : ".";
+  const indexAbs = join(bundle.root, dirRel, "index.md");
+  const existing = await readFile(indexAbs, "utf8").catch(() => null);
+  if (existing === null) return; // nothing to clean up
+
+  const link = `${id.slice(id.lastIndexOf("/") + 1)}.md`;
+  // Match both plugin-authored entries ("./a.md") and hand-written relative links
+  // ("tables/a.md", "a.md", "./tables/a.md") that resolve to this concept.
+  const linkRe = new RegExp(`^.*\\]\\((?:[^)\\s]*/)?\\.?/?${escapeRegExp(link)}\\).*$`, "m");
+  const updated = existing
+    .split("\n")
+    .filter((line) => !linkRe.test(line))
+    .join("\n");
+
+  // Drop the whole file if nothing (but whitespace) remains.
+  if (updated.trim().length === 0) {
+    await rm(indexAbs, { force: true });
+    bundle.indexDirs.delete(dirRel);
+    return;
+  }
+  await writeFile(indexAbs, updated, "utf8");
 }
 
 /** Prepend a bullet under today's ISO date heading to log.md (create file if missing). */
