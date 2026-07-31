@@ -110,11 +110,11 @@ opencode 会自动加载其插件目录下的任意 `*.js` / `*.ts` 文件。提
 
 ### 方式一：离线 / 内网（单文件，零依赖，推荐用于受限网络）
 
-一个完全打包、无运行时依赖的 `okf.js` 是内网环境最简单的分发形式。从 [最新 release](https://github.com/likai-hust/opencode-okf-context/releases) 拿到离线包（如 `opencode-okf-context-0.1.1-offline.tar.gz`）或自行构建后，把文件放进 opencode 的插件目录即可：
+一个完全打包、无运行时依赖的 `okf.js` 是内网环境最简单的分发形式。从 [最新 release](https://github.com/likai-hust/opencode-okf-context/releases) 拿到离线包（如 `opencode-okf-context-0.1.2-offline.tar.gz`）或自行构建后，把文件放进 opencode 的插件目录即可：
 
 ```bash
 mkdir -p ~/.config/opencode/plugin          # 全局（对所有项目生效）
-tar -xzf opencode-okf-context-0.1.1-offline.tar.gz -C ~/.config/opencode/plugin okf.js
+tar -xzf opencode-okf-context-0.1.2-offline.tar.gz -C ~/.config/opencode/plugin okf.js
 # 或按项目安装：放到对应项目的 .opencode/plugin/okf.js
 opencode debug agent build | grep okf       # 验证 6 个工具已注册
 ```
@@ -232,7 +232,7 @@ bunx tsc --noEmit   # 类型检查
 
 ```bash
 bun run build       # tsup 打包 JS（yaml 已 bundle）+ tsc 生成 d.ts
-npm pack            # 生成 opencode-okf-context-0.1.1.tgz
+npm pack            # 生成 opencode-okf-context-0.1.2.tgz
 npm publish         # 发布到 npm（需先 npm login）
 ```
 
