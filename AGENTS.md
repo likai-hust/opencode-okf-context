@@ -28,7 +28,7 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 67 tests across core / messages / write / validate / search / robustness / integration
+bun test            # 92 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
 npm pack            # produces opencode-okf-context-0.1.3.tgz
@@ -123,6 +123,43 @@ still not mis-classified; edge cases can always be declared via explicit `bundle
 - Throwaway bundles are created in `os.tmpdir()` (see `tests/write.test.ts` `cloneFixture`,
   `tests/validate.test.ts` `setupTempBundle`). Always `rm` them in `finally` + `state.markStale()`.
 - A bundle root needs an `index.md` with `okf_version: "0.2"` + an (empty) `log.md` to be recognized.
+
+### Mandatory test gates for prompt / context / unload changes
+
+Any change touching **source code that affects what the model sees or when content is
+released from context** MUST pass these in addition to the full suite — this is the
+plugin's core promise, don't ship a regression:
+
+1. **`tests/messages.test.ts`** — unload/dedup/nudge unit tests. Any change to
+   `src/messages.ts` (transform logic), `src/registry.ts` (placeholders), or
+   `src/config.ts` (unload/nudge defaults) requires this file green.
+2. **`tests/prompt-trigger.test.ts`** — prompt wording guards (always run, zero cost)
+   + **opt-in E2E hit-rate suite**: run `OKF_TRIGGER_E2E=1 bun test tests/prompt-trigger.test.ts`
+   after any change to `src/indexing.ts` (L0 manifest), `src/tools.ts` (tool descriptions),
+   or `src/messages.ts` (nudge text). It fires real natural-language queries at a live
+   `opencode run` in this repo and measures okf_* trigger rate (costs real LLM API; ~3 min).
+   Note: the fixture bundle auto-scans as `opencode-okf-context` (project root) + `unload-bundle`
+   + `sample-bundle` in a live run — assertions must target `unload-bundle`.
+3. **`tests/unload-dataset.test.ts`** — disk dataset (`fixtures/unload-bundle/`, 40 concepts,
+   3 docs > 6000 chars) + parameterized unload scenarios + the **8-turn context-size
+   trajectory** (proves unload genuinely shrinks bytes sent to the LLM vs a no-unload control).
+   Required after any change to `src/messages.ts`, `src/config.ts`, or `src/state.ts`.
+4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 92 tests).
+
+Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
+wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`
+scenario-first description). If a wording change is intentional, update the guards in the
+same commit.
+
+### Test dataset (fixtures/unload-bundle/)
+
+40-concept OKF bundle (tables / metrics / glossary / runbooks / reference) built for
+multi-turn unload testing. 3 reference docs (`sla_policy`, `api_schema`, `compliance`) exceed
+6000 chars to cross the nudge threshold; `data_model` / `ownership_matrix` are mid-sized for
+accumulation scenarios. All frontmatter values are JSON-quoted (a bare `: ` in a string breaks
+YAML parsing). The dataset is committed — extend it by adding .md files directly; keep
+concepts typed (`type:` required) and, for new large docs, keep body > 6000 chars if they
+should cross the nudge threshold.
 
 ## Config schema
 
