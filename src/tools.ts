@@ -1,11 +1,12 @@
 /**
- * The six custom tools registered by the plugin:
+ * The seven custom tools registered by the plugin:
  *   okf_list    — browse a bundle / directory index (L1 progressive disclosure)
  *   okf_read    — load a full concept (L2); footer nudges the model to unload when done
  *   okf_search  — keyword search across titles/descriptions/tags/body; returns snippets, not full docs
  *   okf_write   — create/update a concept (partial update supported); updates parent index.md and prepends to log.md
  *   okf_validate— read-only concept validation; emits okf_write fix commands for issues found
  *   okf_unload  — explicitly unload one or all loaded concepts; reports chars freed
+ *   okf_refs    — query a concept's reference graph (incoming + outgoing), metadata only; no body loaded
  *
  * Tools return strings (opencode renders tool output as text). okf_read output is what the
  * messages-transform layer later replaces with placeholders — it is the only output we track.
@@ -47,6 +48,112 @@ function readHeader(c: Concept, projectDir: string): string {
 /** Footer appended to okf_read output so the model knows how to release the context. */
 function readFooter(c: { id: string }, bundleName: string): string {
   return `\n\n---\n_This OKF concept is now in context. When you no longer need it, call okf_unload(id: "${c.id}", bundle: "${bundleName}") to free the context._`;
+}
+
+/**
+ * Build a reverse link index by scanning every concept's body in a bundle.
+ * Returns Map<targetId, sourceId[]> — for each concept, the ids of concepts that link TO it.
+ *
+ * Real-time scan over the in-memory `bundle.concepts` map (bodies are already loaded at
+ * discovery time), so this is zero extra I/O — same cost class as okf_search's body scan.
+ * Not cached: always reflects the current on-disk state, so a freshly written concept is
+ * visible immediately without any cache-invalidation bookkeeping.
+ *
+ * The index is intentionally complete (no `type` guard): it records the raw "who links to
+ * whom" fact. The presentation layer (readReferences / okf_refs) applies the scheme-B
+ * filter (source must have `type`) when rendering, keeping this index reusable + testable.
+ */
+function buildBacklinkIndex(bundle: Bundle): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const source of bundle.concepts.values()) {
+    for (const link of extractLinks(source.body, source.id)) {
+      const targetId = link.replace(/\.md$/i, "");
+      if (!bundle.concepts.has(targetId)) continue; // unresolved link — skip
+      let arr = index.get(targetId);
+      if (!arr) {
+        arr = [];
+        index.set(targetId, arr);
+      }
+      if (!arr.includes(source.id)) arr.push(source.id); // dedup sources
+    }
+  }
+  return index;
+}
+
+/**
+ * Collect the OUTGOING concept links of `c` that qualify for display: the target must
+ * resolve to a concept in its bundle AND have a `type` (scheme B — plain .md docs without
+ * `type` are not knowledge concepts and are skipped). Returns concept refs in first-seen
+ * order, deduped by id.
+ */
+function outgoingRefs(c: Concept, bundle: Bundle): Concept[] {
+  const links = extractLinks(c.body, c.id);
+  const seen = new Set<string>();
+  const out: Concept[] = [];
+  for (const link of links) {
+    const id = link.replace(/\.md$/i, "");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const target = bundle.concepts.get(id);
+    if (!target) continue; // unresolved — okf_validate reports broken links
+    if (!target.type) continue; // scheme B: skip plain MD docs without `type`
+    out.push(target);
+  }
+  return out;
+}
+
+/**
+ * Collect the INCOMING concept refs for `c` (who links to it), using a precomputed
+ * backlink index. Scheme B: a source is listed only if it has a `type` (plain MD docs that
+ * happen to link here are not knowledge concepts). Returns sources in first-seen order.
+ */
+function incomingRefs(c: Concept, bundle: Bundle, backlinks: Map<string, string[]>): Concept[] {
+  const sourceIds = backlinks.get(c.id) ?? [];
+  const out: Concept[] = [];
+  for (const sid of sourceIds) {
+    const source = bundle.concepts.get(sid);
+    if (!source) continue;
+    if (!source.type) continue; // scheme B: skip plain MD sources
+    out.push(source);
+  }
+  return out;
+}
+
+/** Render one neighbor row: metadata + a ready-to-run okf_read reload command. */
+function refsRow(target: Concept, bundleName: string): string {
+  return `  - ${describeConcept(target)}  → okf_read(id: "${target.id}", bundle: "${bundleName}")`;
+}
+
+/**
+ * Build the references annotation appended to okf_read output: BOTH outgoing (this concept
+ * links to) and incoming (referenced by) neighbors, metadata only. Scheme B applies to the
+ * listed neighbors (must have `type`). Returns "" when neither side has any qualifying ref
+ * (so no empty annotation is appended for link-less / plain-doc-only concepts).
+ *
+ * `bundles` is the full bundle list because incoming refs may come from other concepts in
+ * the same bundle; the concept's own bundle is located by identity.
+ */
+function readReferences(c: Concept, bundles: Bundle[]): string {
+  const bundle = bundles.find((b) => b.concepts.has(c.id)) ?? bundles[0];
+  if (!bundle) return "";
+  const bundleName = bundle.name;
+
+  const out = outgoingRefs(c, bundle);
+  const backlinks = buildBacklinkIndex(bundle);
+  const inc = incomingRefs(c, bundle, backlinks);
+
+  if (out.length === 0 && inc.length === 0) return "";
+
+  const sections: string[] = [];
+  if (out.length > 0) {
+    const label = out.length === 1 ? "Outgoing references (this concept links to):" : `Outgoing references (this concept links to ${out.length}):`;
+    sections.push(`${label}\n${out.map((t) => refsRow(t, bundleName)).join("\n")}`);
+  }
+  if (inc.length > 0) {
+    const label = inc.length === 1 ? "Incoming references (referenced by 1 concept):" : `Incoming references (referenced by ${inc.length} concepts):`;
+    sections.push(`${label}\n${inc.map((t) => refsRow(t, bundleName)).join("\n")}`);
+  }
+  return `\n\n---\n${sections.join("\n\n")}`;
 }
 
 /** Helper: ensure bundles are loaded; returns them or throws a friendly message. */
@@ -113,8 +220,11 @@ export function buildTools(cfg: OkfConfig) {
             return readHeader(concept, context.directory) + body;
           });
           // One footer for the whole batch; unload treats the batch as a single unit.
+          // References annotation follows the last concept (same as the footer) so the batch
+          // reads as one contiguous block.
           const last = resolved[resolved.length - 1]!;
-          return parts.join("\n---\n") + readFooter(last.concept, last.bundle.name);
+          const refs = readReferences(last.concept, bundles);
+          return parts.join("\n---\n") + refs + readFooter(last.concept, last.bundle.name);
         }
 
         const found = resolveConcept(bundles, args.id!, args.bundle);
@@ -124,7 +234,8 @@ export function buildTools(cfg: OkfConfig) {
         }
         const { bundle, concept } = found;
         const body = renderConceptFull(concept);
-        return readHeader(concept, context.directory) + body + readFooter(concept, bundle.name);
+        const refs = readReferences(concept, bundles);
+        return readHeader(concept, context.directory) + body + refs + readFooter(concept, bundle.name);
       },
     }),
 
@@ -498,6 +609,52 @@ export function buildTools(cfg: OkfConfig) {
         const key = conceptKey(found.bundle.name, found.concept.id);
         const wasNew = state.unload(context.sessionID, key);
         return `${wasNew ? "Marked" : "Already marked"} concept ${found.concept.id} (bundle ${found.bundle.name}) for unload. It will be replaced with a placeholder on the next request.`;
+      },
+    }),
+
+    okf_refs: tool({
+      description:
+        'Query the reference graph of a concept WITHOUT loading its full text — returns the incoming (who links to it) and outgoing (what it links to) neighbors, metadata only (title/type/description). Use for impact analysis ("what breaks if I change X?", "who depends on this table?") and discovering hub concepts. Never returns bodies; call okf_read on a neighbor id to load it. Args: id (concept path), bundle (name; omit if only one).',
+      args: {
+        id: tool.schema.string().describe('Concept id, e.g. "tables/orders".'),
+        bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
+      },
+      async execute(args) {
+        const bundles = await requireBundles();
+        const found = resolveConcept(bundles, args.id, args.bundle);
+        if (!found) {
+          const id = normalizeId(args.id);
+          throw new Error(`Concept not found: ${id}${args.bundle ? ` in bundle ${args.bundle}` : ""}. Use okf_list to browse available concepts.`);
+        }
+        const { bundle, concept } = found;
+
+        const out = outgoingRefs(concept, bundle);
+        const backlinks = buildBacklinkIndex(bundle);
+        const inc = incomingRefs(concept, bundle, backlinks);
+
+        const lines: string[] = [];
+        lines.push(`Reference graph for ${concept.id}${concept.type ? ` [${concept.type}]` : ""}${concept.description ? ` — ${concept.description}` : ""}.`);
+        lines.push("");
+
+        if (out.length === 0 && inc.length === 0) {
+          lines.push("No references: this concept links to nothing, and nothing links to it.");
+          return lines.join("\n") + "\n";
+        }
+
+        if (out.length > 0) {
+          const label = out.length === 1 ? "Outgoing (links to 1 concept):" : `Outgoing (links to ${out.length} concepts):`;
+          lines.push(label);
+          for (const t of out) lines.push(refsRow(t, bundle.name));
+          lines.push("");
+        }
+        if (inc.length > 0) {
+          const label = inc.length === 1 ? "Incoming (referenced by 1 concept):" : `Incoming (referenced by ${inc.length} concepts):`;
+          lines.push(label);
+          for (const t of inc) lines.push(refsRow(t, bundle.name));
+          lines.push("");
+        }
+        lines.push("(Use okf_read to load any neighbor's full text.)");
+        return lines.join("\n") + "\n";
       },
     }),
   };

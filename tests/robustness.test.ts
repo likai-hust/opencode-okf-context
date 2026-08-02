@@ -331,3 +331,89 @@ test("batch okf_read output unloads as a unit via transformOutbound", async () =
     state.markStale();
   }
 });
+
+// ---------------------------------------------------------------------
+// M5: okf_read References annotation (in-bundle cross-link metadata)
+// ---------------------------------------------------------------------
+
+test("okf_read references annotation skips broken links, external links, and anchors", async () => {
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n',
+    "a.md": "---\ntype: T\ntitle: a\ndescription: d\n---\n\n# a\nSee [missing](./nope.md), [google](https://google.com), and [#section](#section).\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const out = await hooks.tool!.okf_read.execute({ id: "a", bundle: "kb" }, ctx);
+    // No qualifying in-bundle concept link → no annotation block at all.
+    expect(out).not.toContain("Outgoing references");
+    expect(out).not.toContain("Incoming references");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("okf_read references annotation skips links to plain MD docs without type", async () => {
+  // a is a typed concept linking to b; b is a plain .md with NO frontmatter/type.
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n',
+    "a.md": "---\ntype: T\ntitle: a\ndescription: d\n---\n\n# a\nSee [b](./b.md).\n",
+    "b.md": "# b\njust a plain markdown doc, no frontmatter\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const out = await hooks.tool!.okf_read.execute({ id: "a", bundle: "kb" }, ctx);
+    // b resolves but has no `type` → skipped → no qualifying links → block omitted.
+    expect(out).not.toContain("Outgoing references");
+    expect(out).not.toContain("Incoming references");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// M6: okf_refs query tool + incoming references
+// ---------------------------------------------------------------------
+
+test("okf_refs reports 'No references' for an isolated concept", async () => {
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n',
+    "solo.md": "---\ntype: Note\ntitle: solo\ndescription: isolated\n---\n\n# solo\nNo links in or out.\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const out = await hooks.tool!.okf_refs.execute({ id: "solo", bundle: "kb" }, ctx);
+    expect(out).toContain("No references");
+    expect(out).not.toContain("Outgoing");
+    expect(out).not.toContain("Incoming");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("okf_refs skips plain-MD sources in incoming (scheme B)", async () => {
+  // b (typed) links to a (typed); c (plain MD, no type) also links to a.
+  // Incoming for a should list b but NOT c.
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n',
+    "a.md": "---\ntype: T\ntitle: a\ndescription: hub\n---\n\n# a\nHub concept.\n",
+    "b.md": "---\ntype: T\ntitle: b\ndescription: typed source\n---\n\n# b\nLinks to [a](./a.md).\n",
+    "c.md": "# c\nplain doc linking to [a](./a.md)\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const out = await hooks.tool!.okf_refs.execute({ id: "a", bundle: "kb" }, ctx);
+    expect(out).toContain("Incoming (referenced by 1");
+    expect(out).toContain("b [T]"); // typed source listed
+    expect(out).not.toContain("plain doc"); // plain-MD source c hidden
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});

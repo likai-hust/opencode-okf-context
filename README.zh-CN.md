@@ -43,11 +43,12 @@ L2 全文（按需，体积大，有生命周期）
 | 工具 | 参数 | 返回 |
 |---|---|---|
 | `okf_list` | `bundle?`、`path?` | 某个 bundle 或子目录的索引（仅标题 + 描述） |
-| `okf_read` | `id` 或 `ids: [...]`、`bundle?` | concept 的完整 markdown（单个，或批量整体加载）+ 末尾一行"用完请 okf_unload"引导 |
+| `okf_read` | `id` 或 `ids: [...]`、`bundle?` | concept 的完整 markdown（单个，或批量整体加载）+ 出/入边引用元数据 + 末尾一行"用完请 okf_unload"引导 |
 | `okf_search` | `query`、`bundle?`、`maxResults?` | 先搜元数据（title/description/tags），仅当无匹配时回退搜正文；返回精简引用 + 一行片段，绝不返回全文 |
 | `okf_write` | `id`、`type?`、`title?`、`description?`、`tags?`、`body?`、`bundle?`、`mode?` | 新建 / 更新 / 删除 concept。`update`（默认）只改传入字段；`delete` 删除文件、移除其 `index.md` 条目并记入 `log.md` |
 | `okf_validate` | `id?` 或 `all: true`、`bundle?` | 只读校验报告（概念级；`all:true` 还含 bundle 级）；每个问题附带一条可直接运行的 `okf_write(...)` 修复命令 |
 | `okf_unload` | `id?` 或 `all: true`、`bundle?` | 标记 concept 立即卸载 |
+| `okf_refs` | `id`、`bundle?` | 查询某个 concept 的引用图谱（谁引用了它 + 它引用了谁），仅元数据、不加载正文。用于影响分析（"改这个表会影响谁？"） |
 
 `okf_validate` 按规则检查每个 concept 并对每个问题给出修复命令——它本身绝不写文件，运行它建议的 `okf_write` 命令即可：
 
@@ -75,10 +76,10 @@ opencode plugin opencode-okf-context@latest --global
 { "plugin": ["opencode-okf-context@latest"] }
 ```
 
-验证 6 个工具已注册：
+验证 7 个工具已注册：
 
 ```bash
-opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
+opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload/refs: true
 ```
 
 > **关于包名：** 社区有一个独立的 `opencode-okf` 包，专注于 OKF bundle 的*创作与校验*。本插件（`opencode-okf-context`）与之互补——管*读取与上下文管理*。两者可同时安装、互不冲突。
@@ -110,7 +111,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 
 ```bash
 bun install
-bun test            # 67 个测试
+bun test            # 99 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 

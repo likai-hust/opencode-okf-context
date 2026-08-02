@@ -43,11 +43,12 @@ Protection: the `keepRecent` most recent reads and `protectedConcepts` globs are
 | tool | args | returns |
 |---|---|---|
 | `okf_list` | `bundle?`, `path?` | a bundle / sub-directory index (titles + descriptions only) |
-| `okf_read` | `id` or `ids: [...]`, `bundle?` | the full concept markdown (one, or a batch loaded as a unit) + a footer reminding the model to unload when done |
+| `okf_read` | `id` or `ids: [...]`, `bundle?` | the full concept markdown (one, or a batch loaded as a unit) + outgoing/incoming reference metadata + a footer reminding the model to unload when done |
 | `okf_search` | `query`, `bundle?`, `maxResults?` | searches metadata first (title/description/tags), body only as a fallback; returns concise refs + a snippet, never full bodies |
 | `okf_write` | `id`, `type?`, `title?`, `description?`, `tags?`, `body?`, `bundle?`, `mode?` | creates / updates / deletes a concept. `update` (default) changes only passed fields; `delete` removes the file, its `index.md` entry, and logs it |
 | `okf_validate` | `id?` or `all: true`, `bundle?` | read-only validation report (concept-level; `all:true` adds bundle-level); each issue comes with a ready-to-run `okf_write(...)` fix command |
 | `okf_unload` | `id?` or `all: true`, `bundle?` | marks concept(s) for immediate unload |
+| `okf_refs` | `id`, `bundle?` | a concept's reference graph (who links to it + what it links to), metadata only — no body loaded. Use for impact analysis ("who depends on this table?") |
 
 `okf_validate` checks each concept against OKF rules and emits a fix command per issue — it never writes files; run the `okf_write` commands it suggests:
 
@@ -75,10 +76,10 @@ or add it to `~/.config/opencode/opencode.json`:
 { "plugin": ["opencode-okf-context@latest"] }
 ```
 
-Verify the 6 tools registered:
+Verify the 7 tools registered:
 
 ```bash
-opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload: true
+opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate/unload/refs: true
 ```
 
 > **Package name:** there's a separate community `opencode-okf` package for *authoring & validating* OKF bundles. This plugin (`opencode-okf-context`) is complementary — it handles *reading & context management*. Both install together without conflict.
@@ -110,7 +111,7 @@ Layered (deep-merged; later layers override earlier): `~/.config/opencode/okf.js
 
 ```bash
 bun install
-bun test            # 67 tests
+bun test            # 99 tests
 bunx tsc --noEmit   # type-check
 ```
 

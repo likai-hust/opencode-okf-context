@@ -74,6 +74,7 @@ export function renderManifest(bundles: Bundle[], maxChars: number): string {
     "- Heard a specific term/name → okf_search(term) first",
     "- Browse what a bundle contains → okf_list",
     "- Already know the concept id → okf_read directly",
+    "- Impact / dependency analysis → okf_refs(id) (who references X / what X references)",
     "",
     "Knowledge loads progressively: okf_list shows titles+descriptions (cheap); okf_read",
     "loads full text. Loaded concepts auto-unload after a few turns — call okf_unload to",

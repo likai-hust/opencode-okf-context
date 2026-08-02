@@ -29,11 +29,11 @@ function makeInput(): Parameters<typeof OkfPlugin>[0] {
   } as any;
 }
 
-test("plugin loads, registers 6 tools + system transform hook", async () => {
+test("plugin loads, registers 7 tools + system transform hook", async () => {
   const hooks = await OkfPlugin(makeInput(), OPTS);
   expect(hooks.tool).toBeDefined();
   expect(Object.keys(hooks.tool!)).toEqual(
-    expect.arrayContaining(["okf_list", "okf_read", "okf_search", "okf_write", "okf_validate", "okf_unload"]),
+    expect.arrayContaining(["okf_list", "okf_read", "okf_search", "okf_write", "okf_validate", "okf_unload", "okf_refs"]),
   );
   expect(hooks["experimental.chat.system.transform"]).toBeDefined();
   expect(hooks["experimental.chat.messages.transform"]).toBeDefined();
@@ -81,6 +81,56 @@ test("okf_read returns full concept with file path header and unload footer", as
   expect(out).toContain("type: BigQuery Table");
   expect(out).toContain("# customers");
   expect(out).toContain("okf_unload"); // footer present
+});
+
+test("okf_read appends outgoing + incoming reference annotations for cross-links", async () => {
+  state.markStale();
+  const hooks = await OkfPlugin(makeInput(), OPTS);
+  // tables/customers body links to [orders](/tables/orders.md); orders has type: BigQuery Table.
+  const out = await hooks.tool!.okf_read.execute(
+    { id: "tables/customers", bundle: "sample-bundle" },
+    { sessionID: "s1", messageID: "m", agent: "build", directory: FIXTURE_PROJECT, worktree: FIXTURE_PROJECT, abort: new AbortController().signal, metadata() {}, async ask() {} } as any,
+  );
+  // Outgoing section: customers links to orders.
+  expect(out).toContain("Outgoing references");
+  expect(out).toContain("orders [BigQuery Table]");
+  expect(out).toContain('okf_read(id: "tables/orders"');
+  // The annotation lets the model decide without browsing the index.
+  expect(out).not.toContain("okf_list");
+});
+
+test("okf_read shows incoming references for a hub concept", async () => {
+  state.markStale();
+  const hooks = await OkfPlugin(makeInput(), OPTS);
+  // orders is referenced by both tables/customers and metrics/active_customers.
+  const out = await hooks.tool!.okf_read.execute(
+    { id: "tables/orders", bundle: "sample-bundle" },
+    { sessionID: "s1", messageID: "m", agent: "build", directory: FIXTURE_PROJECT, worktree: FIXTURE_PROJECT, abort: new AbortController().signal, metadata() {}, async ask() {} } as any,
+  );
+  expect(out).toContain("Incoming references (referenced by 2");
+  // Both referencing concepts appear with their metadata.
+  expect(out).toContain("customers [BigQuery Table]");
+  expect(out).toContain("active_customers [Metric]");
+});
+
+test("okf_refs returns the reference graph without loading any body", async () => {
+  state.markStale();
+  const hooks = await OkfPlugin(makeInput(), OPTS);
+  const out = await hooks.tool!.okf_refs.execute(
+    { id: "tables/orders", bundle: "sample-bundle" },
+    { sessionID: "s1", messageID: "m", agent: "build", directory: FIXTURE_PROJECT, worktree: FIXTURE_PROJECT, abort: new AbortController().signal, metadata() {}, async ask() {} } as any,
+  );
+  // Header identifies the queried concept.
+  expect(out).toContain("Reference graph for tables/orders");
+  // Incoming: referenced by customers + active_customers.
+  expect(out).toContain("Incoming (referenced by 2");
+  expect(out).toContain("customers [BigQuery Table]");
+  expect(out).toContain("active_customers [Metric]");
+  // Outgoing: orders links to customers.
+  expect(out).toContain("Outgoing (links to 1");
+  // Crucially, a refs query must NOT dump concept bodies — only metadata + reload hints.
+  expect(out).not.toContain("# orders");
+  expect(out).toContain('okf_read(id: "tables/customers"');
 });
 
 test("okf_search returns matches with file paths and snippets, not full bodies", async () => {

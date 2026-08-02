@@ -5,7 +5,7 @@ Read this before making changes.
 
 ## What this project is
 
-`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.1.3, MIT) that brings
+`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.1.4, MIT) that brings
 **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 knowledge bundles. It lets an agent read a whole knowledge base without permanently bloating its
 context window.
@@ -28,10 +28,10 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 92 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
+bun test            # 99 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
-npm pack            # produces opencode-okf-context-0.1.3.tgz
+npm pack            # produces opencode-okf-context-0.1.4.tgz
 ```
 
 **Always run `bun test` + `bunx tsc --noEmit` before committing.** Do not commit if either fails.
@@ -47,7 +47,7 @@ src/
   state.ts        in-memory bundle cache + per-session unload/nudge state (singleton)
   registry.ts     bundle/concept resolution, placeholders, glob matching (pure, dependency-free)
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
-  tools.ts        the 6 okf_* tools (list/read/search/write/validate/unload)
+  tools.ts        the 7 okf_* tools (list/read/search/write/validate/unload/refs)
   validate.ts     concept- + bundle-level validation rules + link extraction (pure)
   messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
 tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration
@@ -65,16 +65,17 @@ After N user turns (default 2) or on `okf_unload`, an L2 `okf_read` output is re
 placeholder (title + type + description) in the **outbound** messages only (`messages.ts`). The real
 history is untouched.
 
-## The 6 tools (registered in `tools.ts` `buildTools`)
+## The 7 tools (registered in `tools.ts` `buildTools`)
 
 | tool | purpose |
 |---|---|
 | `okf_list` | browse a bundle/sub-directory index (titles + descriptions only) |
-| `okf_read` | load one concept, or a batch via `ids` (unloads as a unit); footer reminds to unload |
+| `okf_read` | load one concept, or a batch via `ids` (unloads as a unit); footer reminds to unload; output also annotates outgoing + incoming reference metadata so the model can decide whether to follow a cross-link without another `okf_list` |
 | `okf_search` | metadata-first keyword search (title/description/tags), body only as fallback |
 | `okf_write` | create/update/delete a concept. **`update` = partial update** (only passed fields change); **`delete`** removes file + index entry + logs it |
 | `okf_validate` | read-only validation; concept-level rules + (all:true) bundle-level (okf_version/log/links); emits ready-to-run `okf_write` fix commands |
 | `okf_unload` | release concept(s) from context immediately |
+| `okf_refs` | query a concept's reference graph (incoming + outgoing neighbors, metadata only) via a real-time backlink scan; no body loaded — use for impact analysis ("who depends on X?") |
 
 ## OKF format essentials (v0.2)
 
@@ -144,7 +145,7 @@ plugin's core promise, don't ship a regression:
    3 docs > 6000 chars) + parameterized unload scenarios + the **8-turn context-size
    trajectory** (proves unload genuinely shrinks bytes sent to the LLM vs a no-unload control).
    Required after any change to `src/messages.ts`, `src/config.ts`, or `src/state.ts`.
-4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 92 tests).
+4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 99 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`
@@ -171,7 +172,7 @@ validates config keys (`enabled`, `scan`, `bundles`, `disclosure`, `unload`, `nu
 ## Build artifacts (gitignored — never commit)
 
 `dist/`, `release/`, `*.tgz`, `*.tar.gz` are build products regenerated from source. The offline
-distribution is `opencode-okf-context-0.1.3-offline.tar.gz` (contains `okf.js` + `INSTALL.txt` +
+distribution is `opencode-okf-context-0.1.4-offline.tar.gz` (contains `okf.js` + `INSTALL.txt` +
 `okf.schema.json`); rebuild it with `bun run build` then re-tar from `release/`.
 
 ## Commit & push
