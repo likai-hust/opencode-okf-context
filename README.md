@@ -111,7 +111,7 @@ Layered (deep-merged; later layers override earlier): `~/.config/opencode/okf.js
 
 ```bash
 bun install
-bun test            # 105 tests
+bun test            # 106 tests
 bunx tsc --noEmit   # type-check
 ```
 

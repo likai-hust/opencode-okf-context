@@ -603,3 +603,34 @@ test("sibling bundles under the project root are each discovered independently",
     state.markStale();
   }
 });
+
+// ---------------------------------------------------------------------
+// M9: okf_list filters authored index.md lines that link to untyped files
+// ---------------------------------------------------------------------
+
+test("okf_list hides authored index.md entries linking to plain MD without type", async () => {
+  // index.md hand-writes links to AGENTS.md/README.md (no type) and customers.md (typed).
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n\n## Docs\n* [AGENTS](AGENTS.md) - instructions\n* [README](README.md) - readme\n\n## Tables\n* [customers](customers.md) - Customer table\n',
+    "log.md": "# Log\n",
+    "AGENTS.md": "# AGENTS\nno frontmatter\n",
+    "README.md": "# readme\nno frontmatter\n",
+    "customers.md": "---\ntype: Table\ntitle: customers\ndescription: Customer table\n---\n\n# customers\nbody\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const list = await hooks.tool!.okf_list.execute({ bundle: "kb" }, ctx);
+
+    // The typed concept is listed (both in authored section and Concepts section).
+    expect(list).toContain("customers");
+
+    // Authored index lines linking to untyped files are filtered out.
+    expect(list).not.toContain("AGENTS");
+    expect(list).not.toContain("README");
+    expect(list).not.toContain("readme");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});

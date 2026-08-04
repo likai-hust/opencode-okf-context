@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { toPosix } from "./discovery.js";
 import { listTypedConceptsForIndex, listSubdirsForIndex, describeConcept, relPathFor } from "./registry.js";
+import { extractLinks } from "./validate.js";
 import type { Bundle } from "./types.js";
 
 /** Render a directory index for display in okf_list. */
@@ -45,12 +46,40 @@ export async function renderIndex(bundle: Bundle, dirRel: string, projectDir?: s
 async function readAuthoredIndex(bundle: Bundle, dirRel: string): Promise<string> {
   const abs = dirRel === "." ? join(bundle.root, "index.md") : join(bundle.root, dirRel, "index.md");
   try {
-    return (await readFile(abs, "utf8"))
+    const raw = (await readFile(abs, "utf8"))
       .replace(/^---[\s\S]*?\n---\n?/, "") // strip frontmatter
       .trim();
+    // Drop lines linking to .md files WITHOUT a `type`, so the listing stays consistent
+    // with the scheme-B guard (only typed concepts are shown).
+    return filterUntypedLinks(raw, bundle, dirRel);
   } catch {
     return "";
   }
+}
+
+/**
+ * Remove lines from authored index content that link to in-bundle concepts without a `type`.
+ * A line is dropped if it contains a markdown link whose target resolves to a concept in the
+ * bundle AND that concept has no `type`. Lines without links, external links, and links to
+ * typed concepts are always kept.
+ */
+function filterUntypedLinks(authored: string, bundle: Bundle, dirRel: string): string {
+  const lines = authored.split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const links = extractLinks(line, dirRel === "." ? "" : dirRel);
+    let drop = false;
+    for (const link of links) {
+      const id = link.replace(/\.md$/i, "");
+      const concept = bundle.concepts.get(id);
+      if (concept && (concept.type === undefined || concept.type === "")) {
+        drop = true; // links to an untyped file → hide this line
+        break;
+      }
+    }
+    if (!drop) out.push(line);
+  }
+  return out.join("\n").trim();
 }
 
 /** Render a top-level bundle manifest (bundle names + concept counts + root index hint). */
