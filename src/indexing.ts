@@ -11,7 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { toPosix } from "./discovery.js";
-import { listConceptsForIndex, listSubdirsForIndex, describeConcept, relPathFor } from "./registry.js";
+import { listTypedConceptsForIndex, listSubdirsForIndex, describeConcept, relPathFor } from "./registry.js";
 import type { Bundle } from "./types.js";
 
 /** Render a directory index for display in okf_list. */
@@ -19,7 +19,7 @@ export async function renderIndex(bundle: Bundle, dirRel: string, projectDir?: s
   const indexExists = bundle.indexDirs.has(dirRel);
   const authored = indexExists ? await readAuthoredIndex(bundle, dirRel) : "";
 
-  const concepts = listConceptsForIndex(bundle, dirRel);
+  const concepts = listTypedConceptsForIndex(bundle, dirRel);
   const subdirs = listSubdirsForIndex(bundle, dirRel);
 
   const lines: string[] = [];

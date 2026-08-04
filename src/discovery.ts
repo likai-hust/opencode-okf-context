@@ -94,6 +94,14 @@ interface ScanHit {
   conceptCount: number;
   /** Number of concepts whose frontmatter declares a `type` (bundle heuristic). */
   typedConceptCount: number;
+  /**
+   * Root-level-only markers (depth=0 files, no recursion). isBundleRoot uses these so
+   * a sub-directory's index.md or a deeply nested typed concept can't trick the heuristic
+   * into accepting a plain project root as a bundle.
+   */
+  rootHasIndex: boolean; // root dir directly contains index.md
+  rootHasLog: boolean; // root dir directly contains log.md
+  rootTypedCount: number; // root dir's direct .md files that have a `type`
 }
 
 /** Scan a candidate directory recursively, collecting markdown files & reserved markers. */
@@ -103,6 +111,10 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
   let hasLog = false;
   let conceptCount = 0;
   let typedConceptCount = 0;
+  // Root-level-only markers (depth=0): isBundleRoot reads these, NOT the recursive totals.
+  let rootHasIndex = false;
+  let rootHasLog = false;
+  let rootTypedCount = 0;
 
   async function walk(current: string, depth: number): Promise<void> {
     if (depth > maxDepth) return;
@@ -121,28 +133,36 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
         const lower = entry.name.toLowerCase();
         const relDir = toPosix(relative(dir, current)) || ".";
+        const isRootLevel = depth === 0; // direct child of the scan root
         if (lower === "index.md") {
           indexDirs.add(relDir);
+          if (isRootLevel) rootHasIndex = true;
         } else if (lower === "log.md") {
           hasLog = true;
+          if (isRootLevel) rootHasLog = true;
         }
         if (isConceptFile(entry.name)) {
           files.push(full);
           conceptCount++;
           // Peek at the frontmatter `type` key for the bundle-root heuristic.
+          let hasType = false;
           try {
             const { frontmatter } = splitFrontmatter(await readFile(full, "utf8"));
-            if (asString(frontmatter.type) !== undefined) typedConceptCount++;
+            if (asString(frontmatter.type) !== undefined) {
+              typedConceptCount++;
+              hasType = true;
+            }
           } catch {
             /* unreadable file: skip */
           }
+          if (isRootLevel && hasType) rootTypedCount++;
         }
       }
     }
   }
 
   await walk(dir, 0);
-  return { root: dir, files, indexDirs, hasLog, conceptCount, typedConceptCount };
+  return { root: dir, files, indexDirs, hasLog, conceptCount, typedConceptCount, rootHasIndex, rootHasLog, rootTypedCount };
 }
 
 /**
@@ -150,16 +170,20 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
  *
  * Accepted when either:
  *  1. The root `index.md` declares `okf_version` (the spec's standard marker, §12), OR
- *  2. The dir has an `index.md` or `log.md` AND at least one concept with a `type` key.
+ *  2. The ROOT dir has an `index.md` or `log.md` AND at least one typed concept AT THE ROOT.
  *
  * Condition 2 keeps auto-scan from mis-classifying an ordinary project root (markdown that
  * merely happens to exist) while still accepting bundles that follow the spec's MAY-level
  * `okf_version` convention. Bundles that match neither should be declared explicitly via `bundles`.
+ *
+ * IMPORTANT: only root-level (depth=0) markers count — a sub-directory's index.md or a deeply
+ * nested typed concept must NOT trick this into accepting a plain project as a bundle. That
+ * was a real bug before the rootHasIndex/rootHasLog/rootTypedCount fields were added.
  */
 async function isBundleRoot(hit: ScanHit): Promise<boolean> {
   if (hit.conceptCount === 0) return false;
   // Condition 1: root index.md declares okf_version.
-  if (hit.indexDirs.has(".")) {
+  if (hit.rootHasIndex) {
     try {
       const { frontmatter } = splitFrontmatter(await readFile(join(hit.root, "index.md"), "utf8"));
       if (indexDeclaresBundle(frontmatter)) return true;
@@ -167,8 +191,8 @@ async function isBundleRoot(hit: ScanHit): Promise<boolean> {
       /* unreadable index.md: fall through to condition 2 */
     }
   }
-  // Condition 2: index.md or log.md present AND at least one typed concept.
-  return (hit.indexDirs.size > 0 || hit.hasLog) && hit.typedConceptCount >= 1;
+  // Condition 2: root-level index.md or log.md AND at least one typed concept AT THE ROOT.
+  return (hit.rootHasIndex || hit.rootHasLog) && hit.rootTypedCount >= 1;
 }
 
 /** Build a Bundle object from a scanned root (parses all concepts). */

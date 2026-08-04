@@ -135,11 +135,28 @@ export function listConceptsForIndex(
   return out;
 }
 
+/**
+ * Same as listConceptsForIndex but filters OUT concepts without a `type`.
+ * Used by okf_list so the index only shows real OKF concepts — plain .md files
+ * (README, drafts, notes) that happen to live in the bundle are hidden from the
+ * listing. They are still discovered (so okf_validate can report type-missing)
+ * and still participate in the backlink index; only the list view hides them.
+ */
+export function listTypedConceptsForIndex(
+  bundle: Bundle,
+  dirRel: string,
+): Concept[] {
+  return listConceptsForIndex(bundle, dirRel).filter((c) => c.type !== undefined && c.type !== "");
+}
+
 /** List immediate subdirectories (POSIX, relative) that contain concepts or an index. */
 export function listSubdirsForIndex(bundle: Bundle, dirRel: string): string[] {
   const prefix = dirRel === "." ? "" : dirRel + "/";
   const dirs = new Set<string>();
   for (const c of bundle.concepts.values()) {
+    // Only typed concepts contribute a subdirectory entry — a dir containing only
+    // plain .md docs (no `type`) should not appear as a navigable folder.
+    if (c.type === undefined || c.type === "") continue;
     if (dirRel !== "." && !c.id.startsWith(prefix)) continue;
     const rest = dirRel === "." ? c.id : c.id.slice(prefix.length);
     if (!rest.includes("/")) continue;

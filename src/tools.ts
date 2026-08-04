@@ -570,14 +570,15 @@ export function buildTools(cfg: OkfConfig) {
           for (const issue of issues) {
             const icon = issue.severity === "error" ? "✗" : "⚠";
             report.push(`  ${icon} [${issue.severity}] ${issue.field}: ${issue.message}`);
-            const fix = bundleIssueFix(bundle.name, issue);
+            const fix = bundleIssueFix(bundle.name, issue, bundle.root);
             if (fix) report.push(`    → fix: ${fix}`);
           }
         }
 
         report.push(
           "",
-          "Run the suggested okf_write calls to fix. Each uses mode:\"update\" so only the listed field changes.",
+          "Concept-level fixes: run the suggested okf_write(id, mode:\"update\", <field>) calls — only the listed field changes.",
+          "Bundle-level fixes (okf_version, log.md): edit the bundle's index.md / create log.md directly — these are reserved files okf_write cannot touch.",
           "Issues marked as needing input (type/description/body) require your judgment — replace the <placeholder> with real content.",
         );
         return report.join("\n") + "\n";

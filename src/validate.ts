@@ -309,15 +309,19 @@ export function validateBundleLog(hasLog: boolean): ValidationIssue | undefined 
   return undefined;
 }
 
-/** Build the fix command for a bundle-level issue (used by okf_validate). */
-export function bundleIssueFix(bundleName: string, issue: ValidationIssue): string {
-  const head = `okf_write(id: "log", bundle: "${bundleName}", mode: "update"`;
+/**
+ * Build the fix command for a bundle-level issue (used by okf_validate).
+ * `bundleRoot` is the absolute path to the bundle root, so the instruction names a real
+ * file the agent can edit (not a placeholder). okf_write CANNOT fix these — index.md and
+ * log.md are reserved files it refuses to touch — so the fix is always a direct edit/create.
+ */
+export function bundleIssueFix(bundleName: string, issue: ValidationIssue, bundleRoot?: string): string {
+  const root = bundleRoot ?? "<bundle-root>";
   switch (issue.code) {
     case "bundle-okf-version-missing":
-      // okf_write can't touch index.md (reserved); instruct via a Read/Edit note instead.
-      return `edit <bundle>/index.md: add \`okf_version: "0.2"\` to its frontmatter`;
+      return `edit ${root}/index.md: add \`okf_version: "0.2"\` to its frontmatter (okf_write cannot touch index.md — it is a reserved file)`;
     case "bundle-log-missing":
-      return `${head}, body: "# Changelog")`;
+      return `create ${root}/log.md with content: "# Changelog" (okf_write cannot create log.md — it is a reserved file)`;
     default:
       return "";
   }

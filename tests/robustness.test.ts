@@ -80,11 +80,14 @@ test("bundle with a malformed-YAML concept still discovers and validates", async
   try {
     const hooks = await plugin(project);
     const ctx = { ...CTX, directory: project, worktree: project };
-    // Discovery works (no crash) and the bad concept is present.
+    // Discovery works (no crash). The bad concept has no valid `type` (YAML failed
+    // to parse), so okf_list — which only shows typed concepts — hides it. The good
+    // concept is listed normally.
     const list = await hooks.tool!.okf_list.execute({ bundle: "kb" }, ctx);
-    expect(list).toContain("bad");
+    expect(list).toContain("good");
+    expect(list).not.toContain("bad");
 
-    // Validate reports the yaml parse error on the bad concept.
+    // But validate CAN still see the bad concept and reports the yaml parse error.
     const report = await hooks.tool!.okf_validate.execute({ all: true, bundle: "kb" }, ctx);
     expect(report).toContain("[error] yaml");
     expect(report).toContain("could not be parsed");
@@ -412,6 +415,189 @@ test("okf_refs skips plain-MD sources in incoming (scheme B)", async () => {
     expect(out).toContain("Incoming (referenced by 1");
     expect(out).toContain("b [T]"); // typed source listed
     expect(out).not.toContain("plain doc"); // plain-MD source c hidden
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// M7: validate report must not mislead the model into adding okf_version
+//     to individual concept files (reserved-file clarity + footer wording)
+// ---------------------------------------------------------------------
+
+test("validate bundle-level fix uses a real path and warns okf_write cannot touch reserved files", async () => {
+  // No okf_version in index.md, no log.md → both bundle-level issues fire.
+  const { project, bundleRoot } = await makeBundle({
+    "index.md": "# KB without okf_version\n",
+    "a.md": "---\ntype: T\ntitle: a\ndescription: d\n---\n\n# a\nbody\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const report = await hooks.tool!.okf_validate.execute({ all: true, bundle: "kb" }, ctx);
+
+    // Fix command names a real file path (the actual bundle root), not a placeholder.
+    expect(report).toContain(`${bundleRoot}/index.md`);
+    expect(report).toContain(`${bundleRoot}/log.md`);
+    expect(report).not.toContain("<bundle>");
+
+    // Fix command explicitly says okf_write CANNOT touch these — so the model
+    // won't try okf_write(id: ..., okf_version: ...) on every concept file.
+    expect(report).toContain("okf_write cannot touch");
+    expect(report).toContain('okf_version: "0.2"');
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("validate report footer distinguishes concept-level vs bundle-level fixes", async () => {
+  // One concept with a missing title (concept-level) + bundle without okf_version/log (bundle-level).
+  const { project } = await makeBundle({
+    "index.md": "# KB without okf_version\n",
+    "a.md": "---\ntype: T\ndescription: d\n---\n\n# a\nbody\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const report = await hooks.tool!.okf_validate.execute({ all: true, bundle: "kb" }, ctx);
+
+    // The footer must separate the two fix paths.
+    expect(report).toContain("Concept-level fixes");
+    expect(report).toContain("okf_write");
+    expect(report).toContain("Bundle-level fixes");
+    expect(report).toContain("reserved files okf_write cannot touch");
+
+    // Regression guard: the OLD misleading footer is gone.
+    // (The old line told the model to fix everything via okf_write, causing it
+    //  to add okf_version to individual concept files.)
+    expect(report).not.toContain("Run the suggested okf_write calls to fix");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("validate single concept (id mode) never mentions okf_version or index.md", async () => {
+  // A perfectly valid concept; bundle itself lacks okf_version, but id-mode
+  // validation must NOT surface bundle-level concerns.
+  const { project } = await makeBundle({
+    "index.md": "# KB without okf_version\n",
+    "a.md": "---\ntype: T\ntitle: a\ndescription: d\n---\n\n# a\nbody\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const report = await hooks.tool!.okf_validate.execute({ id: "a", bundle: "kb" }, ctx);
+
+    // Single-concept validation must be purely about that concept — never about
+    // bundle-level okf_version. This is the core guard against the model learning
+    // "this concept needs okf_version" from a validate call.
+    expect(report).not.toContain("okf_version");
+    expect(report).not.toContain("index.md");
+    // No issues → no fix commands at all, so no okf_write in the output.
+    expect(report).not.toContain("okf_write");
+    expect(report).toContain("conform");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// M8: okf_list only shows typed concepts (hides plain .md without type)
+// ---------------------------------------------------------------------
+
+test("okf_list hides plain MD docs without type and only lists typed concepts", async () => {
+  const { project } = await makeBundle({
+    "index.md": '---\nokf_version: "0.2"\n---\n\n# KB\n',
+    "typed.md": "---\ntype: Metric\ntitle: typed\ndescription: a real concept\n---\n\n# typed\nbody\n",
+    "plain.md": "# plain\nno frontmatter at all\n",
+    "notes/scratch.md": "---\ntype: \n---\n\n# scratch\nempty type value\n",
+  });
+  try {
+    const hooks = await plugin(project);
+    const ctx = { ...CTX, directory: project, worktree: project };
+    const list = await hooks.tool!.okf_list.execute({ bundle: "kb" }, ctx);
+
+    // The typed concept is listed.
+    expect(list).toContain("typed");
+    expect(list).toContain("typed [Metric]");
+
+    // Plain MD (no frontmatter) and empty-type docs are hidden from the listing.
+    expect(list).not.toContain("plain");
+    expect(list).not.toContain("scratch");
+
+    // But both are still discovered — validate can see and report them.
+    const report = await hooks.tool!.okf_validate.execute({ all: true, bundle: "kb" }, ctx);
+    expect(report).toContain("plain");
+    expect(report).toContain("scratch");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// H3: bundle-root heuristic must NOT be fooled by sub-dir index.md
+//     or deeply nested typed concepts (root-only markers)
+// ---------------------------------------------------------------------
+
+test("plain project root is NOT mis-detected as a bundle when only a sub-dir has index.md", async () => {
+  // Root has a typed README + a sub-dir with index.md, but NO root index.md/log.md.
+  // Before the fix, condition 2 (indexDirs.size>0 + typedConceptCount>=1) would fire on
+  // the PROJECT ROOT, swallowing everything into one spurious bundle. After the fix the
+  // root is skipped; the sub-dir (which legitimately has its own index + typed concept)
+  // may be detected as a small bundle, but the root README must NOT be part of it.
+  const project = join(tmpdir(), `okf-h3a-${Math.random().toString(36).slice(2)}`);
+  await mkdir(join(project, "docs", "wiki"), { recursive: true });
+  await writeFile(join(project, "README.md"), "---\ntype: readme\n---\n\n# Project\n");
+  await writeFile(join(project, "docs", "wiki", "index.md"), "# Wiki\n");
+  await writeFile(join(project, "docs", "wiki", "concept.md"), "---\ntype: note\n---\n\n# note\n");
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    // The project root must NOT be a bundle (no root index.md/log.md).
+    const rootBundle = bundles.find((b) => b.root === project);
+    expect(rootBundle).toBeUndefined();
+    // Whatever bundles ARE found must not contain the root README as a concept.
+    for (const b of bundles) {
+      expect(b.concepts.has("README")).toBe(false);
+    }
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("sibling bundles under the project root are each discovered independently", async () => {
+  // Two real bundles (each with root index.md + okf_version) side by side under project/.
+  // The project root itself has no index.md, so it must not swallow them.
+  const project = join(tmpdir(), `okf-h3b-${Math.random().toString(36).slice(2)}`);
+  for (const name of ["bundle-a", "bundle-b"]) {
+    await mkdir(join(project, name), { recursive: true });
+    await writeFile(join(project, name, "index.md"), '---\nokf_version: "0.2"\n---\n\n# ' + name + "\n");
+    await writeFile(join(project, name, "c.md"), "---\ntype: T\ntitle: c\n---\n\n# c\nbody\n");
+  }
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    expect(bundles.length).toBe(2);
+    const names = bundles.map((b) => b.name).sort();
+    expect(names).toEqual(["bundle-a", "bundle-b"]);
+    // Each bundle only has its own concept, not the sibling's.
+    for (const b of bundles) {
+      expect(b.concepts.size).toBe(1);
+    }
   } finally {
     await rm(project, { recursive: true, force: true });
     state.markStale();

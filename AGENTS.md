@@ -5,7 +5,7 @@ Read this before making changes.
 
 ## What this project is
 
-`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.1.4, MIT) that brings
+`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.1.5, MIT) that brings
 **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 knowledge bundles. It lets an agent read a whole knowledge base without permanently bloating its
 context window.
@@ -28,10 +28,10 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 99 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
+bun test            # 105 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
-npm pack            # produces opencode-okf-context-0.1.4.tgz
+npm pack            # produces opencode-okf-context-0.1.5.tgz
 ```
 
 **Always run `bun test` + `bunx tsc --noEmit` before committing.** Do not commit if either fails.
@@ -145,7 +145,7 @@ plugin's core promise, don't ship a regression:
    3 docs > 6000 chars) + parameterized unload scenarios + the **8-turn context-size
    trajectory** (proves unload genuinely shrinks bytes sent to the LLM vs a no-unload control).
    Required after any change to `src/messages.ts`, `src/config.ts`, or `src/state.ts`.
-4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 99 tests).
+4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 105 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`
@@ -172,7 +172,7 @@ validates config keys (`enabled`, `scan`, `bundles`, `disclosure`, `unload`, `nu
 ## Build artifacts (gitignored — never commit)
 
 `dist/`, `release/`, `*.tgz`, `*.tar.gz` are build products regenerated from source. The offline
-distribution is `opencode-okf-context-0.1.4-offline.tar.gz` (contains `okf.js` + `INSTALL.txt` +
+distribution is `opencode-okf-context-0.1.5-offline.tar.gz` (contains `okf.js` + `INSTALL.txt` +
 `okf.schema.json`); rebuild it with `bun run build` then re-tar from `release/`.
 
 ## Commit & push

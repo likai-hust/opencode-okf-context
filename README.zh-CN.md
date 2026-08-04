@@ -111,7 +111,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 
 ```bash
 bun install
-bun test            # 99 个测试
+bun test            # 105 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 
