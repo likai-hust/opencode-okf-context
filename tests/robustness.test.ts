@@ -314,7 +314,7 @@ test("batch okf_read output unloads as a unit via transformOutbound", async () =
     // afterTurns=1 -> the batch should be replaced by a single batch placeholder.
     const result = transformOutbound(input, {
       enabled: true,
-      scan: { enabled: false, maxDepth: 4, ignore: [] },
+      scan: { enabled: false, maxDepth: 4 },
       bundles: [],
       disclosure: { injectManifest: true, maxManifestChars: 2000 },
       unload: { enabled: true, afterTurns: 1, keepRecent: 0, placeholder: "minimal" },
@@ -683,6 +683,96 @@ test("nested explicit bundle is discovered separately and excluded from the oute
     const wikiTables = await hooks.tool!.okf_list.execute({ bundle: "wiki", path: "tables" }, ctx);
     expect(wikiTables).toContain("customers");
     expect(wikiTables).toContain("[Table]");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// H5: `.opencode` IS scanned (skill bundles live there, e.g.
+//     `.opencode/skill/`); other hidden directories stay skipped and
+//     SKIP_DIRS still apply inside `.opencode`
+// ---------------------------------------------------------------------
+
+/** Create a bundle-shaped dir (okf_version index + typed concept) at `dir`. */
+async function writeBundleShaped(dir: string, withVersion = true): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  const fm = withVersion ? '---\nokf_version: "0.2"\n---\n\n' : "";
+  await writeFile(join(dir, "index.md"), `${fm}# Index\n`);
+  await writeFile(
+    join(dir, "c.md"),
+    "---\ntype: Skill\ntitle: c\ndescription: d\n---\n\n# c\nbody\n",
+  );
+}
+
+test("bundle under .opencode is auto-discovered (explicit okf_version marker)", async () => {
+  const project = join(tmpdir(), `okf-h5a-${Math.random().toString(36).slice(2)}`);
+  await writeBundleShaped(join(project, ".opencode", "skill"));
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    expect(bundles.length).toBe(1);
+    expect(bundles[0]!.name).toBe("skill");
+    expect(bundles[0]!.concepts.has("c")).toBe(true);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("heuristic bundle under .opencode (index + typed concept, no okf_version) is discovered", async () => {
+  const project = join(tmpdir(), `okf-h5b-${Math.random().toString(36).slice(2)}`);
+  await writeBundleShaped(join(project, ".opencode", "skill"), false);
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    expect(bundles.length).toBe(1);
+    expect(bundles[0]!.name).toBe("skill");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("other hidden directories (e.g. .github) are still skipped", async () => {
+  const project = join(tmpdir(), `okf-h5c-${Math.random().toString(36).slice(2)}`);
+  await writeBundleShaped(join(project, ".github", "docs"));
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    expect(bundles.length).toBe(0);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+test("SKIP_DIRS still apply inside .opencode (node_modules not scanned)", async () => {
+  // Mirrors this repo's own layout: .opencode/node_modules/<pkg>/README.md etc.
+  // must not leak in even though .opencode itself is traversed.
+  const project = join(tmpdir(), `okf-h5d-${Math.random().toString(36).slice(2)}`);
+  await writeBundleShaped(join(project, ".opencode", "node_modules", "yaml"));
+  try {
+    const bundles = await discoverBundles({
+      projectRoot: project,
+      scan: true,
+      maxDepth: 4,
+      configured: [],
+    });
+    expect(bundles.length).toBe(0);
   } finally {
     await rm(project, { recursive: true, force: true });
     state.markStale();

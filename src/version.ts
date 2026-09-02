@@ -4,4 +4,4 @@
  * hand-edited dist is invisible otherwise). Kept in sync with package.json by
  * a test gate (tests/version.test.ts) rather than build-time magic.
  */
-export const PLUGIN_VERSION = "0.1.7";
+export const PLUGIN_VERSION = "0.1.8";

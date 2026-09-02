@@ -44,7 +44,6 @@ export interface WriteConfig {
 export interface ScanConfig {
   enabled: boolean;
   maxDepth: number;
-  ignore: string[];
 }
 
 export interface DisclosureConfig {
@@ -66,7 +65,7 @@ export interface OkfConfig {
 
 export const DEFAULT_CONFIG: OkfConfig = {
   enabled: true,
-  scan: { enabled: true, maxDepth: 4, ignore: [] },
+  scan: { enabled: true, maxDepth: 4 },
   bundles: [],
   disclosure: { injectManifest: true, maxManifestChars: 2000 },
   unload: {

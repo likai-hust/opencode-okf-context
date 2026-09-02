@@ -92,7 +92,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 // .opencode/okf.jsonc
 {
   "enabled": true,
-  "scan":   { "enabled": true, "maxDepth": 4, "ignore": [] },
+  "scan":   { "enabled": true, "maxDepth": 4 },
   "bundles": [{ "path": "docs/knowledge", "name": "project-kb" }],
   "disclosure": { "injectManifest": true, "maxManifestChars": 2000 },
   "unload": {
@@ -107,11 +107,13 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 }
 ```
 
+自动扫描会跳过构建/VCS 目录（`node_modules`、`dist`、`.git` 等）和隐藏目录——唯一例外是 **`.opencode` 会被扫描**，放在其中的 bundle（如 `.opencode/skill/`）可被自动发现。
+
 ## 开发
 
 ```bash
 bun install
-bun test            # 110 个测试
+bun test            # 114 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 

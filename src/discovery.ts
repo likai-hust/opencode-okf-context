@@ -42,8 +42,20 @@ const SKIP_DIRS = new Set([
   ".turbo",
   ".cache",
   "coverage",
-  ".opencode",
 ]);
+
+/**
+ * Hidden directories that ARE scanned. `.opencode` is opencode's config dir but commonly
+ * hosts skill/knowledge bundles (e.g. `.opencode/skill/`), so it is traversed like any
+ * other directory. All other dot-directories stay skipped.
+ */
+const HIDDEN_SCAN_ALLOW = new Set([".opencode"]);
+
+/** Whether a directory (by entry name) is traversed during scanning. */
+function traversableDir(name: string): boolean {
+  if (SKIP_DIRS.has(name)) return false;
+  return !name.startsWith(".") || HIDDEN_SCAN_ALLOW.has(name);
+}
 
 /** Convert an OS path to a POSIX-style relative id (no leading drive, forward slashes). */
 export function toPosix(p: string): string {
@@ -125,12 +137,12 @@ async function scanDir(dir: string, maxDepth: number): Promise<ScanHit> {
       return;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".") && entry.name !== ".") continue;
       const full = join(current, entry.name);
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
+        if (!traversableDir(entry.name)) continue;
         await walk(full, depth + 1);
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        if (entry.name.startsWith(".")) continue; // hidden files stay hidden
         const lower = entry.name.toLowerCase();
         const relDir = toPosix(relative(dir, current)) || ".";
         const isRootLevel = depth === 0; // direct child of the scan root
@@ -321,9 +333,7 @@ async function scanForBundleRoots(
         if (!insideBundle || explicitMarker) {
           await accept(current);
           for (const entry of entries) {
-            if (!entry.isDirectory()) continue;
-            if (SKIP_DIRS.has(entry.name)) continue;
-            if (entry.name.startsWith(".")) continue;
+            if (!entry.isDirectory() || !traversableDir(entry.name)) continue;
             await walk(join(current, entry.name), depth + 1, true);
           }
           return;
@@ -331,9 +341,7 @@ async function scanForBundleRoots(
       }
     }
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (SKIP_DIRS.has(entry.name)) continue;
-      if (entry.name.startsWith(".")) continue;
+      if (!entry.isDirectory() || !traversableDir(entry.name)) continue;
       await walk(join(current, entry.name), depth + 1, insideBundle);
     }
   }

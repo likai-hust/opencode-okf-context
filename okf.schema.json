@@ -16,8 +16,7 @@
       "default": {},
       "properties": {
         "enabled": { "type": "boolean", "default": true, "description": "Auto-scan the project root for OKF bundles." },
-        "maxDepth": { "type": "integer", "default": 4, "minimum": 0, "description": "Max directory depth for auto-scan." },
-        "ignore": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional directory names to skip during scan." }
+        "maxDepth": { "type": "integer", "default": 4, "minimum": 0, "description": "Max directory depth for auto-scan." }
       }
     },
     "bundles": {
