@@ -11,7 +11,7 @@
  */
 import { test, expect } from "bun:test";
 import { mkdir, rm, writeFile, readFile, access } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { OkfPlugin } from "../src/index.js";
 import { state } from "../src/state.js";
@@ -326,7 +326,7 @@ test("batch okf_read output unloads as a unit via transformOutbound", async () =
 
     expect(result.unloaded).toBe(1);
     const replaced = input.messages[1]!.parts[0]!.state.output as string;
-    expect(replaced).toContain("batch of 2 concepts unloaded");
+    expect(replaced).toContain("batch of 2 concepts auto-unloaded");
     expect(replaced).toContain("okf_read");
     expect(replaced).not.toContain("body-a");
   } finally {
@@ -629,6 +629,60 @@ test("okf_list hides authored index.md entries linking to plain MD without type"
     expect(list).not.toContain("AGENTS");
     expect(list).not.toContain("README");
     expect(list).not.toContain("readme");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    state.markStale();
+  }
+});
+
+// ---------------------------------------------------------------------
+// H4: nested explicit bundles — an outer (possibly accidental) root must
+//     not swallow a real inner bundle whose index.md declares okf_version
+// ---------------------------------------------------------------------
+
+test("nested explicit bundle is discovered separately and excluded from the outer bundle", async () => {
+  // Real-world shape: project root has an okf_version index.md (e.g. created by an AI
+  // following a validate fix command) + untyped AGENTS/README; the REAL knowledge bundle
+  // lives at doca/wiki with its own okf_version declaration.
+  const project = join(tmpdir(), `okf-h4-${Math.random().toString(36).slice(2)}`);
+  await mkdir(join(project, "doca", "wiki", "tables"), { recursive: true });
+  await writeFile(join(project, "index.md"), '---\nokf_version: "0.2"\n---\n# Project\n');
+  await writeFile(join(project, "AGENTS.md"), '---\n---\n\n# AGENTS\nno type\n');
+  await writeFile(join(project, "README.md"), "# README\nno frontmatter\n");
+  await writeFile(join(project, "doca", "wiki", "index.md"), '---\nokf_version: "0.2"\n---\n# Wiki\n');
+  await writeFile(join(project, "doca", "wiki", "log.md"), "# Log\n");
+  await writeFile(
+    join(project, "doca", "wiki", "tables", "customers.md"),
+    "---\ntype: Table\ntitle: customers\ndescription: Customer table\n---\n\n# customers\nbody\n",
+  );
+  try {
+    const hooks = await OkfPlugin(
+      { directory: project, worktree: project, serverUrl: new URL("http://x"), project: {} as any, client: {} as any, $: {} as any } as any,
+      { scan: { enabled: true, maxDepth: 4 }, bundles: [] },
+    );
+    const ctx = { ...CTX, directory: project, worktree: project };
+
+    // BOTH the outer root and the inner wiki are bundles.
+    const overview = await hooks.tool!.okf_list.execute({}, ctx);
+    expect(overview).toContain("Available OKF bundles");
+    expect(overview).toContain("wiki");
+    // The overview self-reports the running plugin version.
+    expect(overview).toContain("opencode-okf-context v");
+
+    // The outer bundle exists but the inner subtree is EXCLUDED from its concepts:
+    // the wiki concept must resolve to the wiki bundle, not the outer one.
+    const outerName = project.split(sep).pop()!;
+    const outerList = await hooks.tool!.okf_list.execute({ bundle: outerName }, ctx);
+    expect(outerList).not.toContain("customers"); // inner concept not in outer
+    expect(outerList).not.toContain("AGENTS");    // untyped hidden from listing
+    expect(outerList).not.toContain("README");
+
+    // The inner bundle works standalone and has its own concept.
+    const wikiList = await hooks.tool!.okf_list.execute({ bundle: "wiki" }, ctx);
+    expect(wikiList).toContain("tables/");
+    const wikiTables = await hooks.tool!.okf_list.execute({ bundle: "wiki", path: "tables" }, ctx);
+    expect(wikiTables).toContain("customers");
+    expect(wikiTables).toContain("[Table]");
   } finally {
     await rm(project, { recursive: true, force: true });
     state.markStale();

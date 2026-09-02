@@ -94,6 +94,12 @@ function renderValue(v: unknown): string {
 /**
  * Build the placeholder text substituted in place of an unloaded concept's full output.
  * "description" mode keeps title + type + description so the model retains what it was.
+ *
+ * Wording matters: the placeholder must NOT read as a directive to reload. Models that see
+ * "unloaded … Reload with okf_read" after every read can enter a read→unload→reload loop
+ * (observed in the wild: a model re-reading a doc forever to "verify" it). So the text
+ * states the unload is routine, that no action is needed, and that okf_read is only for
+ * when the content is genuinely needed again.
  */
 export function placeholderFor(
   bundleName: string,
@@ -102,8 +108,9 @@ export function placeholderFor(
   freedChars: number,
 ): string {
   const id = c.id;
-  const reloadHint = `Reload with okf_read(id: "${id}", bundle: "${bundleName}").`;
-  const freed = `[OKF] concept "${id}" unloaded — ~${Math.round(freedChars)} chars freed. ${reloadHint}`;
+  const freed = `[OKF] concept "${id}" auto-unloaded — ~${Math.round(freedChars)} chars freed. ` +
+    `This is routine context management, not an error; no action is needed. ` +
+    `Call okf_read(id: "${id}", bundle: "${bundleName}") ONLY if you genuinely need the full text again.`;
   if (mode === "minimal") {
     return freed;
   }
@@ -113,7 +120,7 @@ export function placeholderFor(
 
 /** Placeholder used when a concept was unloaded because it was re-read (dedup). */
 export function dedupPlaceholder(bundleName: string, id: string): string {
-  return `[OKF] earlier read of "${id}" deduplicated — the latest full text is retained below. Reload later with okf_read(id: "${id}", bundle: "${bundleName}").`;
+  return `[OKF] earlier read of "${id}" deduplicated — the latest full text is retained below; no action is needed. Reload later with okf_read(id: "${id}", bundle: "${bundleName}") only if needed.`;
 }
 
 /** Build a sorted list of (concept) entries for an index. */

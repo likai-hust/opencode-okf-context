@@ -70,6 +70,32 @@ test("okf_list returns the root index with concept entries", async () => {
   expect(tables).toContain("fixtures/sample-bundle/tables/customers.md");
 });
 
+test("okf_list without bundle arg lists all available bundles instead of erroring", async () => {
+  state.markStale();
+  // Multiple bundles: sample-bundle + unload-bundle (both are fixtures).
+  const multiOpts = {
+    scan: { enabled: false },
+    bundles: [
+      { path: "fixtures/sample-bundle", name: "sample-bundle" },
+      { path: "fixtures/unload-bundle", name: "unload-bundle" },
+    ],
+  };
+  const hooks = await OkfPlugin(makeInput(), multiOpts);
+  const out = await hooks.tool!.okf_list.execute(
+    {},
+    { sessionID: "s1", messageID: "m", agent: "build", directory: FIXTURE_PROJECT, worktree: FIXTURE_PROJECT, abort: new AbortController().signal, metadata() {}, async ask() {} } as any,
+  );
+  // Overview of all bundles, not an error.
+  expect(out).toContain("Available OKF bundles");
+  expect(out).toContain("sample-bundle");
+  expect(out).toContain("unload-bundle");
+  // Each bundle has a browse hint.
+  expect(out).toContain('okf_list(bundle: "sample-bundle")');
+  expect(out).toContain('okf_list(bundle: "unload-bundle")');
+  // Must NOT throw — it returns a string, not an error.
+  expect(typeof out).toBe("string");
+});
+
 test("okf_read returns full concept with file path header and unload footer", async () => {
   state.markStale();
   const hooks = await OkfPlugin(makeInput(), OPTS);

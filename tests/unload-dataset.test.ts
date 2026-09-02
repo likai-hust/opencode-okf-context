@@ -285,7 +285,7 @@ describe("unload scenarios (Part B)", () => {
     expect(res.unloaded).toBe(1);
     const tp = input.messages[1]!.parts[0]! as Extract<Part, { type: "tool" }>;
     const text = (tp.state as ToolStateCompleted).output;
-    expect(text).toContain("batch of 3 concepts unloaded");
+    expect(text).toContain("batch of 3 concepts auto-unloaded");
     expect(text).toContain('okf_read(ids: ["glossary/aov"');
     expect(text).toContain('okf_read(ids: ["glossary/cac"');
   });

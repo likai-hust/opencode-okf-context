@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { toPosix } from "./discovery.js";
 import { listTypedConceptsForIndex, listSubdirsForIndex, describeConcept, relPathFor } from "./registry.js";
 import { extractLinks } from "./validate.js";
+import { PLUGIN_VERSION } from "./version.js";
 import type { Bundle } from "./types.js";
 
 /** Render a directory index for display in okf_list. */
@@ -108,6 +109,8 @@ export function renderManifest(bundles: Bundle[], maxChars: number): string {
     "Knowledge loads progressively: okf_list shows titles+descriptions (cheap); okf_read",
     "loads full text. Loaded concepts auto-unload after a few turns — call okf_unload to",
     "release sooner, okf_read to reload.",
+    "",
+    `Plugin: opencode-okf-context v${PLUGIN_VERSION}`,
     "",
   ];
   let budget = maxChars - lines.join("\n").length;

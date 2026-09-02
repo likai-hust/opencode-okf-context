@@ -208,7 +208,7 @@ function placeholderText(
   if (s.batchIds.length > 0) {
     const bName = s.bundle ?? bundles[0]?.name ?? "?";
     const reloads = s.batchIds.map((id) => `okf_read(ids: ["${id}"], bundle: "${bName}")`).join("; ");
-    return `[OKF] batch of ${s.batchIds.length} concepts unloaded — ~${Math.round(freedChars)} chars freed. Reload with ${reloads}.`;
+    return `[OKF] batch of ${s.batchIds.length} concepts auto-unloaded — ~${Math.round(freedChars)} chars freed. Routine context management; no action needed. Reload with ${reloads} only if genuinely needed.`;
   }
   const found = resolveConcept(bundles, s.id, s.bundle);
   const bName = found?.bundle.name ?? s.bundle ?? "?";
@@ -216,7 +216,7 @@ function placeholderText(
     return placeholderFor(bName, found.concept, cfg.unload.placeholder, freedChars);
   }
   // Concept no longer resolvable (deleted?) — minimal placeholder.
-  return `[OKF] concept "${s.id}"${s.bundle ? ` (${s.bundle})` : ""} unloaded — ~${Math.round(freedChars)} chars freed. Reload with okf_read(id: "${s.id}").`;
+  return `[OKF] concept "${s.id}"${s.bundle ? ` (${s.bundle})` : ""} auto-unloaded — ~${Math.round(freedChars)} chars freed. Routine context management; no action needed. Reload with okf_read(id: "${s.id}") only if genuinely needed.`;
 }
 
 /** Is this concept protected by the protectedConcepts globs? */

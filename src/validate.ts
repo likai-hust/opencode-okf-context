@@ -319,9 +319,11 @@ export function bundleIssueFix(bundleName: string, issue: ValidationIssue, bundl
   const root = bundleRoot ?? "<bundle-root>";
   switch (issue.code) {
     case "bundle-okf-version-missing":
-      return `edit ${root}/index.md: add \`okf_version: "0.2"\` to its frontmatter (okf_write cannot touch index.md — it is a reserved file)`;
+      // CAUTION text matters: blindly creating a root index.md with okf_version turns an
+      // accidentally-detected directory (e.g. a whole project root) into a permanent bundle.
+      return `edit ${root}/index.md: add \`okf_version: "0.2"\` to its frontmatter — ONLY if this directory is intentionally a knowledge bundle root. If this is a project root detected by accident, do NOT create index.md; declare the real bundle in .opencode/okf.jsonc instead (okf_write cannot touch index.md — reserved file)`;
     case "bundle-log-missing":
-      return `create ${root}/log.md with content: "# Changelog" (okf_write cannot create log.md — it is a reserved file)`;
+      return `create ${root}/log.md with content: "# Changelog" — only if this directory is intentionally a bundle root (okf_write cannot create log.md — reserved file)`;
     default:
       return "";
   }

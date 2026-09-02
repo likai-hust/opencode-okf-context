@@ -20,6 +20,8 @@ import { toPosix } from "./discovery.js";
 import { renderIndex } from "./indexing.js";
 import {
   describeConcept,
+  listTypedConceptsForIndex,
+  listSubdirsForIndex,
   normalizeId,
   relPathFor,
   renderConceptFull,
@@ -28,6 +30,7 @@ import {
 } from "./registry.js";
 import { state } from "./state.js";
 import { conceptKey } from "./registry.js";
+import { PLUGIN_VERSION } from "./version.js";
 import {
   validateConcept,
   summarize,
@@ -165,19 +168,43 @@ async function requireBundles(): Promise<Bundle[]> {
   return bundles;
 }
 
+/** Render a top-level overview of all bundles (used when okf_list is called without a bundle). */
+function renderBundleOverview(bundles: Bundle[]): string {
+  const lines: string[] = [`# Available OKF bundles (opencode-okf-context v${PLUGIN_VERSION})`, ""];
+  for (const b of bundles) {
+    lines.push(`## ${b.name} (${b.concepts.size} concepts${b.hasLog ? ", has log" : ""})`);
+    lines.push(`Browse: okf_list(bundle: "${b.name}")`);
+    // Show root-level concept titles + sub-directories as a quick preview.
+    const rootConcepts = listTypedConceptsForIndex(b, ".");
+    const rootSubdirs = listSubdirsForIndex(b, ".");
+    if (rootConcepts.length > 0) {
+      lines.push(`Concepts at root: ${rootConcepts.slice(0, 5).map((c) => c.title ?? c.id).join(", ")}${rootConcepts.length > 5 ? `, … (+${rootConcepts.length - 5})` : ""}`);
+    }
+    if (rootSubdirs.length > 0) {
+      lines.push(`Directories: ${rootSubdirs.map(toPosix).join(", ")}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n") + "\n";
+}
+
 export function buildTools(cfg: OkfConfig) {
   return {
     okf_list: tool({
       description:
-        "List the index of an OKF knowledge bundle (or a sub-directory). Returns concept titles + descriptions only (progressive disclosure), never full documents. Use this before okf_read to discover what's available. Args: bundle (name; omit if only one bundle), path (sub-directory relative to bundle root; default root).",
+        "List the index of an OKF knowledge bundle (or a sub-directory). Returns concept titles + descriptions only (progressive disclosure), never full documents. Use this before okf_read to discover what's available. Args: bundle (name; omit to list all available bundles), path (sub-directory relative to bundle root; default root).",
       args: {
-        bundle: tool.schema.string().optional().describe("Bundle name. Omit when only one bundle exists."),
+        bundle: tool.schema.string().optional().describe("Bundle name. Omit to list all available bundles."),
         path: tool.schema.string().optional().describe('Sub-directory path (e.g. "tables"). Default: root.'),
       },
       async execute(args, context) {
         const bundles = await requireBundles();
         const bundle = resolveBundle(bundles, args.bundle);
         if (!bundle) {
+          // No bundle specified (or name not found) + multiple bundles → show overview.
+          if (bundles.length > 1) {
+            return renderBundleOverview(bundles);
+          }
           throw new Error(`Bundle not found: ${args.bundle ?? "(none)"}. Available: ${bundles.map((b) => b.name).join(", ")}`);
         }
         const dirRel = normalizeDir(args.path);
@@ -514,7 +541,7 @@ export function buildTools(cfg: OkfConfig) {
 
         const validCount = targets.length - conceptsWithIssues.length;
         const bundleLabel = scope.length === 1 ? scope[0]!.name : `${scope.length} bundles`;
-        report.push(`Validated ${targets.length} concept(s) in ${bundleLabel}: ${validCount} valid, ${conceptsWithIssues.length} with issues (${totalErrors} error${totalErrors === 1 ? "" : "s"}, ${totalWarnings} warning${totalWarnings === 1 ? "" : "s"}).`);
+        report.push(`Validated ${targets.length} concept(s) in ${bundleLabel}: ${validCount} valid, ${conceptsWithIssues.length} with issues (${totalErrors} error${totalErrors === 1 ? "" : "s"}, ${totalWarnings} warning${totalWarnings === 1 ? "" : "s"}). [opencode-okf-context v${PLUGIN_VERSION}]`);
 
         // Bundle-level checks only in all:true mode (needs the full bundle context).
         const bundleIssues: Array<{ bundle: Bundle; issues: ValidationIssue[] }> = [];

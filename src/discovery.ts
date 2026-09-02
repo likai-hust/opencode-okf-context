@@ -229,9 +229,25 @@ export interface DiscoverOptions {
   configured: Array<{ path: string; name?: string }>;
 }
 
+/** Whether `dir`'s own root index.md explicitly declares okf_version (spec §12 marker). */
+async function declaresOkfVersion(dir: string): Promise<boolean> {
+  try {
+    const { frontmatter } = splitFrontmatter(await readFile(join(dir, "index.md"), "utf8"));
+    return indexDeclaresBundle(frontmatter);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Discover bundles: merge auto-scanned + explicitly configured bundles.
  * Configured bundles always win (same root → config name/origin replaces scan).
+ *
+ * Nested bundles: a directory whose own index.md declares okf_version is accepted as a
+ * bundle even when it sits inside another accepted bundle root, and its subtree is then
+ * EXCLUDED from the outer bundle's concepts. This keeps a real knowledge bundle (e.g.
+ * `doca/wiki/`) discoverable even if a project root got detected as a bundle too —
+ * the outer must not swallow the inner.
  */
 export async function discoverBundles(opts: DiscoverOptions): Promise<Bundle[]> {
   const byRoot = new Map<string, Bundle>();
@@ -244,34 +260,47 @@ export async function discoverBundles(opts: DiscoverOptions): Promise<Bundle[]> 
     byRoot.set(bundle.root, bundle);
   }
 
-  // 2. Auto-scan.
+  // 2. Auto-scan: collect accepted roots first, then build innermost-first so outer
+  // bundles can exclude the subtrees that belong to nested bundles.
   if (opts.scan) {
+    const acceptedRoots: string[] = [];
     await scanForBundleRoots(opts.projectRoot, opts.maxDepth, async (root) => {
       if (byRoot.has(root)) return; // configured wins
-      // Don't nest-scan inside an already-accepted bundle root; accept the topmost.
-      for (const existing of byRoot.keys()) {
-        if (root !== existing && (root.startsWith(existing + sep) || root.startsWith(existing + "/"))) {
-          return;
-        }
-      }
-      const hit = await scanDir(root, 8);
-      const bundle = await buildBundle(root, undefined, "scan", hit);
-      byRoot.set(bundle.root, bundle);
+      acceptedRoots.push(root);
     });
+    acceptedRoots.sort((a, b) => b.length - a.length); // deepest first
+    for (const root of acceptedRoots) {
+      const hit = await scanDir(root, 8);
+      // Exclude concept files that belong to a NESTED bundle — i.e. another accepted or
+      // configured root strictly INSIDE this root (outer roots must not drain this one).
+      const innerRoots = Array.from(byRoot.keys())
+        .concat(acceptedRoots)
+        .filter((r) => r !== root && (r.startsWith(root + sep) || r.startsWith(root + "/")));
+      const inInner = (f: string) => innerRoots.some((ir) => f.startsWith(ir + sep) || f.startsWith(ir + "/"));
+      const files = hit.files.filter((f) => !inInner(f));
+      const bundle = await buildBundle(root, undefined, "scan", { ...hit, files });
+      byRoot.set(bundle.root, bundle);
+    }
   }
 
   return Array.from(byRoot.values());
 }
 
-/** Walk the project looking for directories that look like bundle roots. Accepts topmost only. */
+/**
+ * Walk the project looking for directories that look like bundle roots.
+ *
+ * Topmost heuristic roots win (an outer bundle suppresses *heuristic* detection inside
+ * it), BUT a nested directory whose own index.md explicitly declares `okf_version`
+ * (the spec §12 bundle marker) is still accepted as its own bundle — an outer detection
+ * (e.g. an accidentally-detected project root) must not swallow a real nested knowledge
+ * bundle. discoverBundles then excludes the nested subtree from the outer bundle.
+ */
 async function scanForBundleRoots(
   projectRoot: string,
   maxDepth: number,
   accept: (root: string) => Promise<void>,
 ): Promise<void> {
-  const accepted: string[] = [];
-
-  async function walk(current: string, depth: number): Promise<void> {
+  async function walk(current: string, depth: number, insideBundle: boolean): Promise<void> {
     if (depth > maxDepth) return;
     let entries: import("node:fs").Dirent[];
     try {
@@ -285,19 +314,29 @@ async function scanForBundleRoots(
     if (hasMd) {
       const hit = await scanDir(current, Math.min(maxDepth - depth, 8));
       if (await isBundleRoot(hit)) {
-        accepted.push(current);
-        await accept(current);
-        return; // don't descend into an accepted bundle root
+        const explicitMarker = hit.rootHasIndex && (await declaresOkfVersion(current));
+        // Inside an already-accepted bundle, only the explicit spec marker qualifies;
+        // heuristic roots nested in a bundle stay suppressed (fall through to descend,
+        // so deeper explicit markers can still be found).
+        if (!insideBundle || explicitMarker) {
+          await accept(current);
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (SKIP_DIRS.has(entry.name)) continue;
+            if (entry.name.startsWith(".")) continue;
+            await walk(join(current, entry.name), depth + 1, true);
+          }
+          return;
+        }
       }
     }
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       if (SKIP_DIRS.has(entry.name)) continue;
       if (entry.name.startsWith(".")) continue;
-      await walk(join(current, entry.name), depth + 1);
+      await walk(join(current, entry.name), depth + 1, insideBundle);
     }
   }
 
-  await walk(projectRoot, 0);
-  void accepted;
+  await walk(projectRoot, 0, false);
 }
