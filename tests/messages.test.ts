@@ -44,6 +44,18 @@ function readToolPart(
   return { id: "tp" + Math.random(), sessionID, messageID: "a", type: "tool", callID: "c" + Math.random(), tool: "okf_read", state };
 }
 
+function searchToolPart(query: string, output: string, sessionID = "s1"): Part {
+  const state: ToolStateCompleted = {
+    status: "completed",
+    input: { query },
+    output,
+    title: "okf_search",
+    metadata: {},
+    time: { start: 0, end: 0 },
+  };
+  return { id: "tp" + Math.random(), sessionID, messageID: "a", type: "tool", callID: "c" + Math.random(), tool: "okf_search", state };
+}
+
 function makeBundle(name: string, concepts: Array<Partial<Concept> & { id: string }>): Bundle {
   const map = new Map<string, Concept>();
   for (const c of concepts) {
@@ -126,8 +138,9 @@ test("keepRecent=0 unloads a single read purely by turn count", () => {
 });
 
 test("dedup keeps only the latest read of the same concept", () => {
-  const cfg = DEFAULT_CONFIG;
-  cfg.unload = { ...cfg.unload, afterTurns: 99 }; // disable auto-unload
+  // Spread-clone: DEFAULT_CONFIG is a shared mutable object — mutating it directly
+  // pollutes other test files (caught by tests/defaults.test.ts).
+  const cfg = { ...DEFAULT_CONFIG, unload: { ...DEFAULT_CONFIG.unload, afterTurns: 99 } }; // disable auto-unload
   const bundles = [makeBundle("b", [{ id: "dup" }])];
 
   const input = {
@@ -228,4 +241,89 @@ test('force: "soft" vs "strong" produce distinct nudge tones', () => {
   // soft = suggestion ("consider"); strong = directive (no "consider").
   expect(soft).toContain("consider unloading");
   expect(strong).not.toContain("consider unloading");
+});
+
+// --- okf_search output dedup / aging ------------------------------------
+
+test("repeated okf_search keeps only the latest results for the same query", () => {
+  const cfg = { ...DEFAULT_CONFIG, unload: { ...DEFAULT_CONFIG.unload, afterTurns: 99 } };
+  const bundles = [makeBundle("b", [{ id: "x" }])];
+  const input = {
+    messages: [
+      userMsg("s-srch"),
+      assistantMsg("s-srch", [searchToolPart("customer churn", "OLD-RESULTS", "s-srch")]),
+      userMsg("s-srch"),
+      assistantMsg("s-srch", [searchToolPart("Customer  Churn", "NEW-RESULTS", "s-srch")]), // same query normalized
+    ],
+  };
+  const res = transformOutbound(input, cfg, bundles, "s-srch");
+  expect(res.deduped).toBe(1);
+  const first = input.messages[1]!.parts[0] as Extract<Part, { type: "tool" }>;
+  const second = input.messages[3]!.parts[0] as Extract<Part, { type: "tool" }>;
+  expect((first.state as ToolStateCompleted).output).toContain("deduplicated");
+  expect((first.state as ToolStateCompleted).output).toContain("customer churn");
+  expect((second.state as ToolStateCompleted).output).toBe("NEW-RESULTS");
+});
+
+test("stale search results age out after afterTurns; the most recent search is kept", () => {
+  const cfg = { ...DEFAULT_CONFIG, unload: { ...DEFAULT_CONFIG.unload, afterTurns: 2, keepRecent: 0 } };
+  const bundles = [makeBundle("b", [{ id: "x" }])];
+  const input = {
+    messages: [
+      userMsg("s-srch2"),
+      assistantMsg("s-srch2", [searchToolPart("churn", "RESULTS-OLD", "s-srch2")]),
+      userMsg("s-srch2"),
+      assistantMsg(),
+      userMsg("s-srch2"),
+      assistantMsg("s-srch2", [searchToolPart("aov", "RESULTS-NEW", "s-srch2")]), // most recent search: kept
+      userMsg("s-srch2"), // churn search is now 3 turns old (> afterTurns=2)
+    ],
+  };
+  const res = transformOutbound(input, cfg, bundles, "s-srch2");
+  expect(res.unloaded).toBe(1);
+  const old = input.messages[1]!.parts[0] as Extract<Part, { type: "tool" }>;
+  const recent = input.messages[5]!.parts[0] as Extract<Part, { type: "tool" }>;
+  const oldOut = (old.state as ToolStateCompleted).output;
+  expect(oldOut).toContain("released");
+  expect(oldOut).toContain(`~${"RESULTS-OLD".length} chars freed`);
+  expect((recent.state as ToolStateCompleted).output).toBe("RESULTS-NEW");
+});
+
+test("search placeholder wording never directs a reload (anti-loop contract)", () => {
+  const cfg = { ...DEFAULT_CONFIG, unload: { ...DEFAULT_CONFIG.unload, afterTurns: 1, keepRecent: 0 } };
+  const bundles = [makeBundle("b", [{ id: "x" }])];
+  const input = {
+    messages: [
+      userMsg("s-srch3"),
+      assistantMsg("s-srch3", [searchToolPart("churn", "R".repeat(500), "s-srch3")]),
+      userMsg("s-srch3"),
+      assistantMsg("s-srch3", [searchToolPart("aov", "R2", "s-srch3")]),
+      userMsg("s-srch3"),
+    ],
+  };
+  transformOutbound(input, cfg, bundles, "s-srch3");
+  const old = input.messages[1]!.parts[0] as Extract<Part, { type: "tool" }>;
+  const out = (old.state as ToolStateCompleted).output;
+  expect(out).toContain("routine context management");
+  expect(out).toContain("no action is needed");
+  expect(out).toContain("ONLY if you genuinely need");
+  // It must not read as an instruction to re-run right away.
+  expect(out).not.toMatch(/^Re-run/);
+});
+
+test("search outputs are untouched when unload is disabled", () => {
+  const cfg = { ...DEFAULT_CONFIG, unload: { ...DEFAULT_CONFIG.unload, enabled: false } };
+  const bundles = [makeBundle("b", [{ id: "x" }])];
+  const input = {
+    messages: [
+      userMsg("s-srch4"),
+      assistantMsg("s-srch4", [searchToolPart("churn", "RESULTS", "s-srch4")]),
+      userMsg("s-srch4"),
+    ],
+  };
+  const res = transformOutbound(input, cfg, bundles, "s-srch4");
+  expect(res.deduped).toBe(0);
+  expect(res.unloaded).toBe(0);
+  const tp = input.messages[1]!.parts[0] as Extract<Part, { type: "tool" }>;
+  expect((tp.state as ToolStateCompleted).output).toBe("RESULTS");
 });

@@ -1,6 +1,6 @@
 {
   "name": "opencode-okf-context",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "OpenCode plugin: progressive disclosure + auto-unload for OKF (Open Knowledge Format) knowledge bundles. Inspired by DCP's outbound-only context transformation.",
   "type": "module",
   "license": "MIT",
@@ -29,14 +29,20 @@
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "okf": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./server": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
     },
     "./package.json": "./package.json"
   },

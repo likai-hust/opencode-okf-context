@@ -68,13 +68,16 @@ export const DEFAULT_CONFIG: OkfConfig = {
   scan: { enabled: true, maxDepth: 4 },
   bundles: [],
   disclosure: { injectManifest: true, maxManifestChars: 2000 },
+  // Tuned for large (256K-token) context windows: hold concepts a little longer before
+  // unloading (reloading costs a full re-read + a tool round-trip), and only nudge when
+  // retained knowledge is genuinely large. Tests pin these values (tests/defaults.test.ts).
   unload: {
     enabled: true,
-    afterTurns: 2,
-    keepRecent: 1,
+    afterTurns: 4,
+    keepRecent: 2,
     placeholder: "description",
   },
-  nudge: { enabled: true, threshold: 6000, frequency: 3, force: "soft" },
+  nudge: { enabled: true, threshold: 25000, frequency: 3, force: "soft" },
   write: { enabled: true, updateIndex: true, appendLog: true },
   protectedConcepts: [],
   debug: false,
@@ -196,4 +199,37 @@ export async function loadConfig(
   // Plugin options from opencode.json take the highest precedence.
   cfg = mergeConfig(cfg, options);
   return cfg;
+}
+
+/**
+ * Config for the `okf` CLI. The opencode-layered paths (~/.config/opencode, .opencode/)
+ * do not apply outside the plugin — the CLI reads <projectRoot>/.okf.jsonc (or .okf.json)
+ * only, so the same knowledge bundle config can live next to the bundle.
+ *
+ * The CLI is READ-ONLY by default regardless of DEFAULT_CONFIG: writes must be enabled
+ * either by an explicit `write.enabled: true` in the config file or by the --write flag
+ * (the caller applies the flag on top of writeExplicitlyEnabled).
+ */
+export async function loadCliConfig(
+  projectDir: string,
+): Promise<{ cfg: OkfConfig; writeExplicitlyEnabled: boolean }> {
+  let fileJson: Record<string, unknown> | null = null;
+  for (const p of [join(projectDir, ".okf.jsonc"), join(projectDir, ".okf.json")]) {
+    try {
+      if (!(await exists(p))) continue;
+      fileJson = JSON.parse(stripJsonc(await readFile(p, "utf8")));
+      break;
+    } catch {
+      /* malformed layer: skip */
+    }
+  }
+  let cfg = DEFAULT_CONFIG;
+  if (fileJson) cfg = mergeConfig(cfg, fileJson);
+  const writeExplicitlyEnabled =
+    !!fileJson &&
+    typeof fileJson.write === "object" &&
+    fileJson.write !== null &&
+    (fileJson.write as Record<string, unknown>).enabled === true;
+  cfg = mergeConfig(cfg, { write: { enabled: writeExplicitlyEnabled } });
+  return { cfg, writeExplicitlyEnabled };
 }

@@ -4,9 +4,13 @@
  * On every LLM request opencode hands us the full message history. We walk it and:
  *   1. Dedup: for each concept id, if okf_read was called more than once, keep only the
  *      LATEST completed output; replace earlier ones with a "deduplicated" placeholder.
+ *      Same for okf_search: a repeated query keeps only its latest results.
  *   2. Auto-unload: replace a completed okf_read output with a placeholder once enough
  *      user turns have passed (config.unload.afterTurns), except the N most recent
- *      (config.unload.keepRecent) and any protectedConcepts glob.
+ *      (config.unload.keepRecent) and any protectedConcepts glob. Search RESULTS age
+ *      out the same way (the most recent search is always kept) — otherwise stale id
+ *      lists accumulate forever, which the stress benchmark showed to be the largest
+ *      fixed leak in long sessions.
  *   3. Manual unload: replace outputs whose concept key is in the session's unloaded set.
  *   4. Nudge: if total retained okf_read chars exceed nudge.threshold, append a soft
  *      reminder to the last user message text part (throttled by nudge.frequency).
@@ -29,6 +33,7 @@ import {
 import { state } from "./state.js";
 
 const OKF_READ_TOOL = "okf_read";
+const OKF_SEARCH_TOOL = "okf_search";
 
 export interface TransformInput {
   messages: Array<{ info: Message; parts: Part[] }>;
@@ -46,6 +51,20 @@ interface ReadSlot {
   batchIds: string[];
   output: string;
   outputChars: number;
+}
+
+/** A located okf_search tool part within the message array. */
+interface SearchSlot {
+  msgIndex: number;
+  partIndex: number;
+  key: string; // bundle::normalized-query
+  query: string; // normalized (lowercase, collapsed whitespace)
+  outputChars: number;
+}
+
+/** Normalize a search query for dedup keying: case/space-insensitive. */
+function normalizeQuery(q: string): string {
+  return q.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 const NUDGE_TAG = "%%okf-nudge%%";
@@ -107,6 +126,32 @@ export function transformOutbound(
         const freed = s.outputChars;
         replaceOutput(input, s, placeholderText(cfg, bundles, s, freed));
         unloaded++;
+      }
+    }
+  }
+
+  // 2b. Search outputs: repeated queries keep only the latest results; aged results are
+  // compacted like reads. Without this, every okf_search leaves ~1K chars in context
+  // forever — the dominant leak in long sessions (see benchmark/stress.ts).
+  if (cfg.unload.enabled) {
+    const searches = collectSearchSlots(input);
+    if (searches.length > 0) {
+      const lastByKey = new Map<string, SearchSlot>();
+      for (const s of searches) lastByKey.set(s.key, s);
+      // Mirror keepRecent for reads, fixed at 1: the latest search stays available.
+      const mostRecent = searches[searches.length - 1]!;
+      for (const s of searches) {
+        if (s !== lastByKey.get(s.key)) {
+          replaceOutput(input, s, searchDedupPlaceholder(s.query));
+          deduped++;
+          continue;
+        }
+        if (s === mostRecent) continue;
+        const turnsSince = turnsSinceLoad(input, s.msgIndex, turnOf);
+        if (turnsSince >= cfg.unload.afterTurns) {
+          replaceOutput(input, s, searchPlaceholder(s.query, s.outputChars));
+          unloaded++;
+        }
       }
     }
   }
@@ -189,8 +234,52 @@ function collectReadSlots(input: TransformInput): ReadSlot[] {
   return slots;
 }
 
+/** Collect every completed okf_search tool part with its normalized query. */
+function collectSearchSlots(input: TransformInput): SearchSlot[] {
+  const slots: SearchSlot[] = [];
+  for (let mi = 0; mi < input.messages.length; mi++) {
+    const parts = input.messages[mi]!.parts;
+    for (let pi = 0; pi < parts.length; pi++) {
+      const part = parts[pi]!;
+      if (part.type !== "tool" || part.tool !== OKF_SEARCH_TOOL) continue;
+      if (part.state.status !== "completed") continue;
+      const st = part.state as ToolStateCompleted;
+      const qRaw = st.input?.query;
+      if (typeof qRaw !== "string" || qRaw.trim() === "") continue;
+      const bundleRaw = st.input?.bundle;
+      const bundle = typeof bundleRaw === "string" ? bundleRaw : undefined;
+      const query = normalizeQuery(qRaw);
+      slots.push({
+        msgIndex: mi,
+        partIndex: pi,
+        key: `${bundle ?? ""}::${query}`,
+        query,
+        outputChars: st.output.length,
+      });
+    }
+  }
+  return slots;
+}
+
+/**
+ * Placeholder for an aged-out search result. Wording contract (same philosophy as
+ * placeholderFor): state it is routine, no action needed, and that re-searching is ONLY
+ * for when the results are genuinely needed again — never a directive to reload.
+ */
+function searchPlaceholder(query: string, freedChars: number): string {
+  return `[OKF] search results for "${query}" released — ~${Math.round(freedChars)} chars freed. ` +
+    `This is routine context management, not an error; no action is needed. ` +
+    `Re-run okf_search(query: "${query}") ONLY if you genuinely need those results again.`;
+}
+
+/** Placeholder for a superseded duplicate search (same query, later results exist). */
+function searchDedupPlaceholder(query: string): string {
+  return `[OKF] earlier okf_search for "${query}" deduplicated — the latest results are retained; no action is needed. ` +
+    `Re-run the search only if you need the term looked up again.`;
+}
+
 /** Replace a tool part's completed output (in place) with `text`. */
-function replaceOutput(input: TransformInput, s: ReadSlot, text: string): void {
+function replaceOutput(input: TransformInput, s: { msgIndex: number; partIndex: number }, text: string): void {
   const part = input.messages[s.msgIndex]!.parts[s.partIndex]!;
   if (part.type !== "tool" || part.state.status !== "completed") return;
   // Mutate the state object opencode handed us; it is a fresh copy per request.

@@ -21,7 +21,7 @@ L1 索引（按需，体积小）───────────────�
         │ okf_read 加载  /  okf_search 定位
 L2 全文（按需，体积大，有生命周期）
    concept 的完整 markdown 进入上下文
-        │ 经过 N 轮用户消息（默认 2）  ·  或  okf_unload
+        │ 经过 N 轮用户消息（默认 4）  ·  或  okf_unload
 卸载：全文 → 占位符
    "[OKF] concept tables/customers 已卸载 — 释放约 3.2k 字符。
     保留摘要：customers [BigQuery Table] — 客户主表…
@@ -32,8 +32,8 @@ L2 全文（按需，体积大，有生命周期）
 
 | 机制 | 发生了什么 |
 |---|---|
-| **确定性卸载** | 已加载 concept 的 `okf_read` 输出，在足够轮次后或显式 `okf_unload` 时，被替换为紧凑占位符（标题 + 类型 + 描述）。无需调用 LLM。 |
-| **去重（deduplication）** | 同一个 concept 被读取两次时，只保留最新一次的全文；较早的读取折叠为"已去重"占位符。 |
+| **确定性卸载** | 已加载 concept 的 `okf_read` 输出，在足够轮次后或显式 `okf_unload` 时，被替换为紧凑占位符（标题 + 类型 + 描述）。无需调用 LLM。陈旧的检索结果同样老化（保留最近一次检索）。 |
+| **去重（deduplication）** | 同一个 concept 被读取两次时，只保留最新一次的全文；同词重复搜索同理只保留最新结果；较早的读取折叠为"已去重"占位符。 |
 | **软提醒（soft nudge）** | 当留存的 OKF 内容超过阈值，会在最后一条用户消息上锚定一行提醒（绝不新增消息）。 |
 
 保护机制：最近的 `keepRecent` 次读取和 `protectedConcepts` glob 永不自动卸载；显式 `okf_unload` 优先级最高。所有重写只发生在出站消息——真实历史永不改变。
@@ -61,6 +61,26 @@ L2 全文（按需，体积大，有生命周期）
 ```
 
 检查范围：frontmatter 的 `type`/`title`/`description`/`tags` + 正文（概念级）；`okf_version`、`log.md`、断裂的交叉链接（bundle 级，用 `all:true`）。concept 的 YAML 损坏不再拖垮整个 bundle——它会以空 frontmatter 加载并报 `yaml-error`。
+
+## CLI：`okf`（其他 Agent、人、CI）
+
+包内还附带独立的 **`okf`** 命令——与上述工具同一套操作，服务于插件触达不到的环境：其他编码 Agent（通过它们的 shell 工具）、人、以及 CI。
+
+> **装插件 ≠ 有 CLI。** `opencode plugin …` 只抓取插件入口文件，不执行 npm 的 bin 链接。CLI 来自对同一个包的 npm 安装：`npm install -g opencode-okf-context`（或一次性 `npx -p opencode-okf-context okf …`）。建议插件与 CLI 锁定同一版本；`okf version` 会自报实际加载的构建。
+
+```bash
+okf list                                     # 浏览 bundle 索引
+okf search customer churn                    # 元数据优先的搜索
+okf read tables/customers                    # 全文
+okf read reference/api_schema --section Authentication --max-chars 2000
+okf validate --all                           # 仓库门禁：校验有 error 时退出码 1
+okf manifest                                 # 给非 opencode Agent 的规则文件片段
+```
+
+- **读取摄入控制**是 CLI 的上下文手段（opencode 之外没有自动卸载）：`--fields`（只看元数据）、`--section <标题>`、`--max-chars <n>`——从源头少加载，而非事后卸载。
+- **默认只读**：`write`/`update`/`delete` 需要 `--write`（或在 `.okf.jsonc` 里设 `write.enabled: true`）。长正文用 `--body-file <路径|->`（支持 stdin）。
+- 配置：`<项目>/.okf.jsonc`（与插件配置同一 schema）；`--root <路径>` 直达某个 bundle，`--bundle <名称>` 指定。
+- 退出码 `0`/`1`/`2`（正常 / 错误 / 用法）——CI 友好。
 
 ## 安装
 
@@ -96,11 +116,11 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
   "bundles": [{ "path": "docs/knowledge", "name": "project-kb" }],
   "disclosure": { "injectManifest": true, "maxManifestChars": 2000 },
   "unload": {
-    "afterTurns": 2,          // 加载后经过 2 轮用户消息即卸载
-    "keepRecent": 1,          // 最近 1 次读取永不自动卸载
+    "afterTurns": 4,          // 加载后经过 4 轮用户消息即卸载（按大上下文窗口调优）
+    "keepRecent": 2,          // 最近 2 次读取永不自动卸载
     "placeholder": "description"
   },
-  "nudge":   { "threshold": 6000, "frequency": 3, "force": "soft" },
+  "nudge":   { "threshold": 25000, "frequency": 3, "force": "soft" },
   "write":   { "enabled": true, "updateIndex": true, "appendLog": true },
   "protectedConcepts": ["tables/*"],
   "debug": false
@@ -113,7 +133,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 
 ```bash
 bun install
-bun test            # 114 个测试
+bun test            # 146 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 

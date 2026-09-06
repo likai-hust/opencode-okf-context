@@ -5,7 +5,7 @@ Read this before making changes.
 
 ## What this project is
 
-`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.1.8, MIT) that brings
+`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.2.0, MIT) that brings
 **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 knowledge bundles. It lets an agent read a whole knowledge base without permanently bloating its
 context window.
@@ -28,10 +28,10 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 114 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger
+bun test            # 146 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
-npm pack            # produces opencode-okf-context-0.1.8.tgz
+npm pack            # produces opencode-okf-context-0.2.0.tgz
 ```
 
 **Always run `bun test` + `bunx tsc --noEmit` before committing.** Do not commit if either fails.
@@ -47,11 +47,20 @@ src/
   state.ts        in-memory bundle cache + per-session unload/nudge state (singleton)
   registry.ts     bundle/concept resolution, placeholders, glob matching (pure, dependency-free)
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
-  tools.ts        the 7 okf_* tools (list/read/search/write/validate/unload/refs)
+  tools.ts        thin tool() wrappers over operations.ts — tool descriptions live here (wording contract)
+  operations.ts   shared op layer: business logic of the 7 tools + dual-syntax rendering
+                  (syntax "tool" = plugin output, byte-identical; "cli" = shell-style hints,
+                  footer that never mentions okf_unload) + read intake control (fields/section/maxChars)
+  cli.ts          the `okf` bin (dist/cli.js): same operations for non-opencode agents, humans, CI.
+                  Read-only by default (--write or .okf.jsonc write.enabled); exit codes 0/1/2
   validate.ts     concept- + bundle-level validation rules + link extraction (pure)
-  messages.ts     outbound transform: dedup + auto/manual unload + soft nudge
+  messages.ts     outbound transform: dedup (reads + searches) + auto/manual unload + search-result aging + soft nudge
   version.ts      PLUGIN_VERSION — self-reported in manifest/overview/validate (synced to package.json by test)
 tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration, version
+benchmark/        stress benchmark + hit-rate measurement for the intranet sharing deck:
+                  stress.ts (S0 script baseline via real python subprocess / S1 no-unload /
+                  S2 defaults), baseline_reader.py, hitrate.ts (placeholder fact-retention);
+                  outputs results*.md / hitrate.md — NOT part of `bun test` (run manually)
 fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 .opencode/plugin/okf.ts   local-dev re-export so the plugin dogfoods in this repo
 ```
@@ -62,7 +71,7 @@ fixtures/sample-bundle/   a 3-concept OKF bundle for dogfooding & tests
 - **L1 index** — on demand via `okf_list`. Titles + descriptions only (no full bodies).
 - **L2 full text** — on demand via `okf_read`. Full concept enters context; has a lifetime.
 
-After N user turns (default 2) or on `okf_unload`, an L2 `okf_read` output is replaced by a compact
+After N user turns (default 4) or on `okf_unload`, an L2 `okf_read` output is replaced by a compact
 placeholder (title + type + description) in the **outbound** messages only (`messages.ts`). The real
 history is untouched.
 
@@ -77,6 +86,24 @@ history is untouched.
 | `okf_validate` | read-only validation; concept-level rules + (all:true) bundle-level (okf_version/log/links); emits ready-to-run `okf_write` fix commands |
 | `okf_unload` | release concept(s) from context immediately |
 | `okf_refs` | query a concept's reference graph (incoming + outgoing neighbors, metadata only) via a real-time backlink scan; no body loaded — use for impact analysis ("who depends on X?") |
+
+### The `okf` CLI (package bin)
+
+`src/cli.ts` builds `dist/cli.js`, shipped as the package's `okf` bin — the same
+`operations.ts` logic for environments the plugin cannot reach: other coding agents (via
+their shell tool), humans, and CI (`okf validate --all` works as a repo gate, exit 1 on
+errors). Contracts that differ from the plugin, by design:
+
+- **CLI read footer never mentions `okf_unload`** — there is no unload outside opencode.
+  The CLI's context lever is intake control: `--fields` / `--section <h>` / `--max-chars N`
+  (asserted by tests/cli.test.ts).
+- **Read-only by default**: `write`/`update`/`delete` need `--write` or
+  `write.enabled: true` in `.okf.jsonc`. Config comes from `loadCliConfig` —
+  `<project>/.okf.jsonc` only, NOT the opencode-layered paths.
+- `okf manifest` prints a CLI-flavored L0 snippet (renderCliManifest in cli.ts) for
+  pasting into non-opencode agents' rule files (AGENTS.md / CLAUDE.md).
+- The CLI must run on plain Node 18 (not just Bun): the tsup CLI entry carries a
+  `createRequire` banner because bundled `yaml` CJS does `require("process")`.
 
 ## OKF format essentials (v0.2)
 
@@ -164,35 +191,44 @@ plugin's core promise, don't ship a regression:
    3 docs > 6000 chars) + parameterized unload scenarios + the **8-turn context-size
    trajectory** (proves unload genuinely shrinks bytes sent to the LLM vs a no-unload control).
    Required after any change to `src/messages.ts`, `src/config.ts`, or `src/state.ts`.
-4. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 114 tests).
+4. **`tests/reload-e2e.test.ts` + `tests/compaction-e2e.test.ts`** — opt-in live LLM gates
+   (`OKF_RELOAD_E2E=1` / `OKF_COMPACTION_E2E=1`, real API ~9/~5 min): after auto-unload,
+   does the model follow the placeholder's reload hint (reload-e2e); after a simulated
+   compaction, does the manifest still drive okf_* KB access (compaction-e2e; its control
+   arms use `opencode run --pure` = plugin off). Run after ANY change to placeholder
+   wording (`placeholderFor`, `searchPlaceholder`, `searchDedupPlaceholder`, read footer)
+   or the L0 manifest.
+5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 146 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`
-scenario-first description). If a wording change is intentional, update the guards in the
+scenario-first description); the search placeholders' anti-reload-loop wording is pinned in
+`tests/messages.test.ts`. If a wording change is intentional, update the guards in the
 same commit.
 
 ### Test dataset (fixtures/unload-bundle/)
 
 40-concept OKF bundle (tables / metrics / glossary / runbooks / reference) built for
 multi-turn unload testing. 3 reference docs (`sla_policy`, `api_schema`, `compliance`) exceed
-6000 chars to cross the nudge threshold; `data_model` / `ownership_matrix` are mid-sized for
-accumulation scenarios. All frontmatter values are JSON-quoted (a bare `: ` in a string breaks
-YAML parsing). The dataset is committed — extend it by adding .md files directly; keep
-concepts typed (`type:` required) and, for new large docs, keep body > 6000 chars if they
-should cross the nudge threshold.
+6000 chars to cross the nudge threshold used *explicitly* by the tests (`threshold: 6000` —
+the shipped default is 25000, tuned for large context windows; tests/defaults.test.ts pins
+it); `data_model` / `ownership_matrix` are mid-sized for accumulation scenarios. All
+frontmatter values are JSON-quoted (a bare `: ` in a string breaks YAML parsing). The
+dataset is committed — extend it by adding .md files directly; keep concepts typed
+(`type:` required) and, for new large docs, keep body > 6000 chars if they should cross
+the test-time nudge threshold.
 
 ## Config schema
 
 `okf.schema.json` (root) is a JSON Schema (draft-07) for the **plugin config file** `okf.jsonc` — it
 validates config keys (`enabled`, `scan`, `bundles`, `disclosure`, `unload`, `nudge`, `write`,
-`protectedConcepts`, `debug`). It is **NOT** a schema for OKF concept documents. A copy lives at
-`release/okf.schema.json` (keep them in sync if you change config).
+`protectedConcepts`, `debug`). It is **NOT** a schema for OKF concept documents.
 
 ## Build artifacts (gitignored — never commit)
 
-`dist/`, `release/`, `*.tgz`, `*.tar.gz` are build products regenerated from source. The offline
-distribution is `opencode-okf-context-0.1.8-offline.tar.gz` (contains `okf.js` + `INSTALL.txt` +
-`okf.schema.json`); rebuild it with `bun run build` then re-tar from `release/`.
+`dist/`, `release/`, `*.tgz`, `*.tar.gz` are build products regenerated from source.
+**Distribution is npm-only** (the intranet pulls the package from its npm registry): the offline
+tarball was discontinued (2026-09) — do not rebuild one; `release/` is a leftover local artifact.
 
 ## Commit & push
 

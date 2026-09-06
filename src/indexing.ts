@@ -16,8 +16,17 @@ import { extractLinks } from "./validate.js";
 import { PLUGIN_VERSION } from "./version.js";
 import type { Bundle } from "./types.js";
 
-/** Render a directory index for display in okf_list. */
-export async function renderIndex(bundle: Bundle, dirRel: string, projectDir?: string): Promise<string> {
+/**
+ * Render a directory index for display in okf_list.
+ * `syntax` selects the hint flavor: "tool" (opencode tool-call style — the plugin path,
+ * byte-identical to historical output) or "cli" (shell command style for the okf CLI).
+ */
+export async function renderIndex(
+  bundle: Bundle,
+  dirRel: string,
+  projectDir?: string,
+  syntax: "tool" | "cli" = "tool",
+): Promise<string> {
   const indexExists = bundle.indexDirs.has(dirRel);
   const authored = indexExists ? await readAuthoredIndex(bundle, dirRel) : "";
 
@@ -34,10 +43,18 @@ export async function renderIndex(bundle: Bundle, dirRel: string, projectDir?: s
     lines.push("## Concepts");
     for (const c of concepts) {
       const fileHint = projectDir ? `  (file: ${relPathFor(c, projectDir)})` : "";
-      lines.push(`- ${describeConcept(c)}  → okf_read(id: "${c.id}", bundle: "${bundle.name}")${fileHint}`);
+      const cmd =
+        syntax === "cli"
+          ? `okf read ${c.id} --bundle ${bundle.name}`
+          : `okf_read(id: "${c.id}", bundle: "${bundle.name}")`;
+      lines.push(`- ${describeConcept(c)}  → ${cmd}${fileHint}`);
     }
     for (const sub of subdirs) {
-      lines.push(`- 📁 ${toPosix(sub)}/  → okf_list(path: "${toPosix(sub)}", bundle: "${bundle.name}")`);
+      const cmd =
+        syntax === "cli"
+          ? `okf list ${toPosix(sub)} --bundle ${bundle.name}`
+          : `okf_list(path: "${toPosix(sub)}", bundle: "${bundle.name}")`;
+      lines.push(`- 📁 ${toPosix(sub)}/  → ${cmd}`);
     }
   }
   return lines.join("\n") + "\n";

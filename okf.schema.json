@@ -46,8 +46,8 @@
       "description": "Controls auto-unloading of loaded OKF concepts to keep the context lean.",
       "properties": {
         "enabled": { "type": "boolean", "default": true },
-        "afterTurns": { "type": "integer", "default": 2, "minimum": 0, "description": "Replace a loaded concept's output with a placeholder after this many user turns." },
-        "keepRecent": { "type": "integer", "default": 1, "minimum": 0, "description": "Always keep the N most recent okf_read outputs, never auto-unload them." },
+        "afterTurns": { "type": "integer", "default": 4, "minimum": 0, "description": "Replace a loaded concept's output with a placeholder after this many user turns." },
+        "keepRecent": { "type": "integer", "default": 2, "minimum": 0, "description": "Always keep the N most recent okf_read outputs, never auto-unload them." },
         "placeholder": { "type": "string", "enum": ["description", "minimal"], "default": "description", "description": "\"description\" keeps title+type+description; \"minimal\" keeps just a reload hint." }
       }
     },
@@ -57,7 +57,7 @@
       "description": "Soft reminders (anchored to the last user message) when a lot of OKF knowledge is loaded.",
       "properties": {
         "enabled": { "type": "boolean", "default": true },
-        "threshold": { "type": "integer", "default": 6000, "minimum": 0, "description": "Total chars of loaded-and-not-unloaded concepts above which a nudge is injected." },
+        "threshold": { "type": "integer", "default": 25000, "minimum": 0, "description": "Total chars of loaded-and-not-unloaded concepts above which a nudge is injected." },
         "frequency": { "type": "integer", "default": 3, "minimum": 1, "description": "Inject the nudge at most once every N user messages." },
         "force": { "type": "string", "enum": ["soft", "strong"], "default": "soft", "description": "Nudge tone. \"soft\" = a gentle suggestion; \"strong\" = a directive that frames unloading as a context-quality necessity." }
       }
