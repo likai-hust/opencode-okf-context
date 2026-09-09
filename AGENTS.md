@@ -29,7 +29,7 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 159 tests across core / messages / write / validate / search / robustness / integration / version / sync / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
+bun test            # 165 tests across core / messages / write / validate / search / robustness / integration / version / sync / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
 npm pack            # produces opencode-okf-context-0.3.0.tgz
@@ -48,7 +48,11 @@ src/
   sync.ts         remote knowledge sources: git clone/fetch+reset into a shared cache
                   (~/.cache/opencode-okf/remotes/<hash(url+ref)>, override $OKF_REMOTE_CACHE),
                   offline degrade to cache, env-var token auth (never in okf.jsonc),
-                  remoteBundleEntries() turns synced checkouts into configured bundles
+                  remoteBundleEntries() turns synced checkouts into configured bundles;
+                  every sync appends to <cacheRoot>/sync.log ($OKF_SYNC_LOG) — status/
+                  duration/commit/bundles, success included, rotated at 512KB, NEVER
+                  containing the remote URL (ssh URLs embed user@host; git errors are
+                  sanitized too); setSyncDebug(cfg.debug) mirrors lines to stderr
   state.ts        in-memory bundle cache + per-session unload/nudge state (singleton)
   registry.ts     bundle/concept resolution, placeholders, glob matching (pure, dependency-free)
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
@@ -218,7 +222,7 @@ plugin's core promise, don't ship a regression:
    arms use `opencode run --pure` = plugin off). Run after ANY change to placeholder
    wording (`placeholderFor`, `searchPlaceholder`, `searchDedupPlaceholder`, read footer)
    or the L0 manifest.
-5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 159 tests).
+5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 165 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`

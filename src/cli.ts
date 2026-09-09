@@ -22,7 +22,7 @@ import { pathToFileURL } from "node:url";
 import { discoverBundles } from "./discovery.js";
 import { loadCliConfig, type OkfConfig } from "./config.js";
 import { listOp, readOp, searchOp, writeOp, validateOp, refsOp, type OpCtx } from "./operations.js";
-import { remoteBundleEntries, syncRemotes, type SyncMode, type SyncResult } from "./sync.js";
+import { remoteBundleEntries, setSyncDebug, syncRemotes, type SyncMode, type SyncResult } from "./sync.js";
 import { PLUGIN_VERSION } from "./version.js";
 import type { Bundle } from "./types.js";
 
@@ -130,6 +130,7 @@ async function loadOpCtx(
   flags: Map<string, string | true>,
 ): Promise<OpCtx & { writeExplicitlyEnabled: boolean }> {
   const { cfg, writeExplicitlyEnabled } = await loadCliConfig(cwd);
+  setSyncDebug(cfg.debug);
   // --no-sync: skip remote sync entirely (cache-only). --sync: force update, not just clone.
   const remoteMode: SyncMode | null =
     flags.get("no-sync") === true ? null : flags.get("sync") === true ? "always" : "on-clone";
@@ -354,6 +355,7 @@ async function dispatch(args: Args, io: CliIO, cwd: string): Promise<number> {
 
     case "sync": {
       const { cfg } = await loadCliConfig(cwd);
+      setSyncDebug(cfg.debug);
       if (cfg.remotes.length === 0) {
         io.write("No remotes configured in .okf.jsonc — nothing to sync.");
         return 0;

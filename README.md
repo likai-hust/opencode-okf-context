@@ -143,6 +143,7 @@ Auto-scan skips build/VCS directories (`node_modules`, `dist`, `.git`, …) and 
 ```
 
 - **Failures never break the session**: an unreachable origin degrades to the existing cache with a stderr warning; a first-clone failure just skips that remote.
+- **Sync log**: every sync appends a line to `~/.cache/opencode-okf/sync.log` (override `$OKF_SYNC_LOG`) — status, duration, pulled commit, registered bundles — success included. Lines never contain the remote URL (ssh URLs embed `user@host`), only the display name and cache-dir hash; `debug: true` additionally mirrors them to stderr.
 - **Read-only by design**: `okf_write` refuses remote bundles — the next sync would `reset --hard` local edits away. The git repo is the source of truth; this plugin stays a knowledge *access* layer, not a write-back sync.
 - **Auth**: `auth: "env:VARNAME"` reads the token from the environment at sync time (GitLab/GitHub PAT style, `authUser` defaults to `oauth2`) — tokens never live in the committed okf.jsonc. ssh URLs use your ssh agent as-is.
 - **Naming**: a repo with a single bundle takes `name` as-is; a multi-bundle repo registers one bundle per root, named `name/<leaf>`.
@@ -152,7 +153,7 @@ Auto-scan skips build/VCS directories (`node_modules`, `dist`, `.git`, …) and 
 
 ```bash
 bun install
-bun test            # 159 tests
+bun test            # 165 tests
 bunx tsc --noEmit   # type-check
 ```
 

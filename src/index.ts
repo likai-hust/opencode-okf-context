@@ -17,12 +17,14 @@ import { discoverBundles } from "./discovery.js";
 import { renderManifest } from "./indexing.js";
 import { buildTools } from "./tools.js";
 import { transformOutbound } from "./messages.js";
-import { remoteBundleEntries, syncRemotes, syncWarnLine } from "./sync.js";
+import { remoteBundleEntries, setSyncDebug, syncRemotes, syncWarnLine } from "./sync.js";
 import { state } from "./state.js";
 
 export const OkfPlugin: Plugin = async (input: PluginInput, options = {}) => {
   const directory = input.directory;
   const cfg = await loadConfig(directory, options);
+  // debug: true also mirrors every sync.log line to stderr.
+  setSyncDebug(cfg.debug);
 
   const hooks: Hooks = {};
 

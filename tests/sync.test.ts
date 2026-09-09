@@ -10,11 +10,19 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { discoverBundles } from "../src/discovery.js";
-import { applyAuth, remoteBundleEntries, remoteCacheDir, syncRemote } from "../src/sync.js";
+import {
+  applyAuth,
+  gitEnv,
+  remoteBundleEntries,
+  remoteCacheDir,
+  setSyncDebug,
+  syncLogPath,
+  syncRemote,
+} from "../src/sync.js";
 import { writeOp, type OpCtx } from "../src/operations.js";
 import { runCli } from "../src/cli.js";
 
@@ -206,6 +214,102 @@ describe("sync — auth URL injection", () => {
     expect(() => applyAuth("https://x.git", "env:OKF_DEFINITELY_UNSET_VAR_42")).toThrow(/is not set/);
     expect(() => applyAuth("https://x.git", "literal-token")).toThrow(/env:VARNAME/);
     expect(applyAuth("git@github.com:team/kb.git", "env:OKF_TEST_TOKEN")).toBe("git@github.com:team/kb.git");
+  });
+});
+
+describe("sync — sync.log observability", () => {
+  async function readLog(): Promise<string> {
+    return readFile(syncLogPath(), "utf8").catch(() => "");
+  }
+
+  test("clone and update are logged with status, duration, and commit — but no URL", async () => {
+    const r = await syncRemote({ url: originUrl, name: "log-kb" }, "always"); // update path (cache warm)
+    expect(["cloned", "synced"]).toContain(r.status);
+    const log = await readLog();
+    const lines = log.trim().split("\n");
+
+    // start + result pair for this remote, with duration.
+    expect(lines.filter((l) => l.includes("start name=log-kb")).length).toBeGreaterThanOrEqual(1);
+    const syncLine = lines.filter((l) => l.includes("name=log-kb") && l.includes("status=")).pop()!;
+    expect(syncLine).toMatch(/status=(cloned|synced) \d+ms/);
+    if (r.status === "synced") expect(syncLine).toContain("@ ");
+
+    // Privacy: ssh-style URLs embed user@host — the log must carry neither the URL
+    // scheme nor the origin path. (The repo basename may legitimately appear as a
+    // derived display name; the URL and full path must not.)
+    expect(log).not.toContain("file://");
+    expect(log).not.toContain(originDir);
+    expect(log).toContain(`cache=${basename(r.dir)}`);
+  }, 60_000);
+
+  test("failed sync logs an ERROR line", async () => {
+    await syncRemote({ url: `file://${originDir}-still-missing`, name: "log-dead" }, "always");
+    const lines = (await readLog()).trim().split("\n");
+    const errLine = lines.filter((l) => l.includes("name=log-dead")).pop()!;
+    expect(errLine).toContain("ERROR");
+    expect(errLine).toMatch(/status=failed \d+ms/);
+  }, 60_000);
+
+  test("remoteBundleEntries logs the registered bundle names (or a WARN when none)", async () => {
+    const r = await syncRemote({ url: originUrl, name: "log-kb" }, "on-clone");
+    await remoteBundleEntries([r]);
+    let lines = (await readLog()).trim().split("\n");
+    expect(lines.pop()).toMatch(/bundles name=log-kb count=1 registered=log-kb/);
+
+    const empty = await mkdtemp(join(tmpdir(), "okf-empty-"));
+    try {
+      // An initialized but commit-less repo clones fine (with a warning) and holds no bundle.
+      await git(empty, "init", "-b", "main");
+      const er = await syncRemote({ url: `file://${empty}`, name: "log-nobundle" }, "always");
+      // An empty repo clones fine but yields no bundles.
+      expect(er.status).toBe("cloned");
+      await remoteBundleEntries([er]);
+      lines = (await readLog()).trim().split("\n");
+      expect(lines.pop()).toContain("bundles name=log-nobundle count=0");
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("log rotates instead of growing forever", async () => {
+    const rotDir = await mkdtemp(join(tmpdir(), "okf-rot-"));
+    process.env.OKF_SYNC_LOG = join(rotDir, "sync.log");
+    try {
+      // Pre-fill past the rotation threshold.
+      const filler = Array.from({ length: 6000 }, (_, i) => `filler line ${i} ${"x".repeat(100)}`).join("\n");
+      await writeFile(process.env.OKF_SYNC_LOG, filler + "\n", "utf8");
+
+      await syncRemote({ url: originUrl, name: "log-rot" }, "on-clone");
+      const content = await readFile(process.env.OKF_SYNC_LOG, "utf8");
+      expect(content).toContain("name=log-rot"); // the new line survived
+      expect(content).not.toContain("filler line 0 "); // the head was dropped
+      const size = (await stat(process.env.OKF_SYNC_LOG)).size;
+      expect(size).toBeLessThan(600 * 1024);
+    } finally {
+      delete process.env.OKF_SYNC_LOG;
+      await rm(rotDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("setSyncDebug mirrors lines to stderr (captured via console.error)", async () => {
+    const orig = console.error;
+    const seen: string[] = [];
+    console.error = (s: unknown) => seen.push(String(s));
+    setSyncDebug(true);
+    try {
+      await syncRemote({ url: originUrl, name: "log-mirror" }, "on-clone");
+    } finally {
+      setSyncDebug(false);
+      console.error = orig;
+    }
+    expect(seen.some((s) => s.includes("name=log-mirror") && s.includes("status="))).toBe(true);
+  });
+
+  test("git subprocesses are hardened against interactive hangs", () => {
+    const env = gitEnv();
+    expect(env.GIT_SSH_COMMAND).toContain("BatchMode=yes");
+    expect(env.GIT_SSH_COMMAND).toContain("ConnectTimeout=10");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
   });
 });
 

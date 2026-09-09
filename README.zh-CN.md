@@ -143,6 +143,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 ```
 
 - **故障绝不阻断会话**：源不可达时降级使用现有缓存（stderr 一条警告）；首次 clone 失败则跳过该 remote。
+- **同步日志**：每次同步向 `~/.cache/opencode-okf/sync.log` 追加一行（可用 `$OKF_SYNC_LOG` 覆盖）——状态、耗时、拉到的 commit、注册的 bundle，成功也留痕。日志行绝不包含 remote URL（ssh URL 含 `user@host`），只有显示名和缓存目录哈希；`debug: true` 时额外镜像到 stderr。
 - **设计上只读**：`okf_write` 拒绝 remote bundle——下次同步的 `reset --hard` 会冲掉本地改动。git 仓库是唯一事实源；本插件保持知识*访问*层定位，不做写回同步。
 - **鉴权**：`auth: "env:VARNAME"` 在同步时从环境变量读 token（GitLab/GitHub PAT 风格，`authUser` 默认 `oauth2`）——token 绝不落进会被提交的 okf.jsonc。ssh URL 直接走你的 ssh agent。
 - **命名**：仓库里只有一个 bundle 时直接用 `name`；多 bundle 仓库按根目录各注册一个，命名为 `name/<叶子目录>`。
@@ -152,7 +153,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 
 ```bash
 bun install
-bun test            # 159 个测试
+bun test            # 165 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 
