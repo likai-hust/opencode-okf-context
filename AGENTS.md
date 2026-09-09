@@ -5,10 +5,11 @@ Read this before making changes.
 
 ## What this project is
 
-`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.2.0, MIT) that brings
+`opencode-okf-context` is an [OpenCode](https://opencode.ai) plugin (v0.3.0, MIT) that brings
 **progressive disclosure** and **use-and-unload** semantics to [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog)
 knowledge bundles. It lets an agent read a whole knowledge base without permanently bloating its
-context window.
+context window. Knowledge bases can live in the project, be declared via `bundles`, or be
+**git-hosted remotes** synced into a shared local cache (`remotes` config).
 
 Core idea: unlike [DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) (which
 prunes via LLM summaries), this plugin exploits OKF's native structure (`description` frontmatter,
@@ -28,10 +29,10 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 146 tests across core / messages / write / validate / search / robustness / integration / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
+bun test            # 159 tests across core / messages / write / validate / search / robustness / integration / version / sync / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
-npm pack            # produces opencode-okf-context-0.2.0.tgz
+npm pack            # produces opencode-okf-context-0.3.0.tgz
 ```
 
 **Always run `bun test` + `bunx tsc --noEmit` before committing.** Do not commit if either fails.
@@ -43,7 +44,11 @@ src/
   index.ts        plugin entry: wires discovery + tools + transform hooks
   discovery.ts    bundle scanning & OKF concept parsing (fs traversal here; parsing pure)
   frontmatter.ts  YAML frontmatter split / serialize (uses `yaml` package)
-  config.ts       layered okf.jsonc loading (JSONC strip + deep merge)
+  config.ts       layered okf.jsonc loading (JSONC strip + deep merge) + RemoteSource schema
+  sync.ts         remote knowledge sources: git clone/fetch+reset into a shared cache
+                  (~/.cache/opencode-okf/remotes/<hash(url+ref)>, override $OKF_REMOTE_CACHE),
+                  offline degrade to cache, env-var token auth (never in okf.jsonc),
+                  remoteBundleEntries() turns synced checkouts into configured bundles
   state.ts        in-memory bundle cache + per-session unload/nudge state (singleton)
   registry.ts     bundle/concept resolution, placeholders, glob matching (pure, dependency-free)
   indexing.ts     L0 manifest + L1 index rendering (auto-synthesizes missing index.md)
@@ -51,12 +56,17 @@ src/
   operations.ts   shared op layer: business logic of the 7 tools + dual-syntax rendering
                   (syntax "tool" = plugin output, byte-identical; "cli" = shell-style hints,
                   footer that never mentions okf_unload) + read intake control (fields/section/maxChars)
+                  + remote-bundle write guard (origin "remote" → okf_write refuses)
   cli.ts          the `okf` bin (dist/cli.js): same operations for non-opencode agents, humans, CI.
-                  Read-only by default (--write or .okf.jsonc write.enabled); exit codes 0/1/2
+                  Read-only by default (--write or .okf.jsonc write.enabled); exit codes 0/1/2.
+                  `okf sync` force-updates remotes (exit 1 on failure, CI gate); other commands
+                  clone on first use then run from cache (--sync / --no-sync to override)
   validate.ts     concept- + bundle-level validation rules + link extraction (pure)
   messages.ts     outbound transform: dedup (reads + searches) + auto/manual unload + search-result aging + soft nudge
   version.ts      PLUGIN_VERSION — self-reported in manifest/overview/validate (synced to package.json by test)
-tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration, version
+tests/            core, messages (unload/dedup/nudge), write, validate, search, robustness, integration,
+                  version, sync (real local git repos via file:// URLs), unload-dataset, prompt-trigger,
+                  cli, defaults, reload-e2e, compaction-e2e, efficiency-e2e (opt-in)
 benchmark/        stress benchmark + hit-rate measurement for the intranet sharing deck:
                   stress.ts (S0 script baseline via real python subprocess / S1 no-unload /
                   S2 defaults), baseline_reader.py, hitrate.ts (placeholder fact-retention);
@@ -102,6 +112,10 @@ errors). Contracts that differ from the plugin, by design:
   `<project>/.okf.jsonc` only, NOT the opencode-layered paths.
 - `okf manifest` prints a CLI-flavored L0 snippet (renderCliManifest in cli.ts) for
   pasting into non-opencode agents' rule files (AGENTS.md / CLAUDE.md).
+- `okf sync` force-updates all `remotes` (exit 1 if any fails — a CI gate alongside
+  `okf validate --all`). Other commands sync remotes in "on-clone" mode (clone once on
+  first use, then cache-only) — routine reads never touch the network. `--sync` forces
+  an update, `--no-sync` skips remote sync entirely.
 - The CLI must run on plain Node 18 (not just Bun): the tsup CLI entry carries a
   `createRequire` banner because bundled `yaml` CJS does `require("process")`.
 
@@ -162,6 +176,12 @@ keeps it in sync with package.json.
    `noExternal` to produce a self-contained single file.
 6. **Config is layered** (global → env → project → plugin options), deep-merged via `mergeConfig`.
    Arrays are replaced, not concatenated.
+7. **Remote bundles are read-only.** `remotes` sync git-hosted knowledge bases into a shared
+   cache (`sync.ts`) and register them with `origin: "remote"`; `okf_write` refuses them (a
+   `reset --hard` on the next sync would clobber local edits). Never weaken this guard, and
+   never write auth tokens into okf.jsonc — `auth: "env:VARNAME"` reads them from the
+   environment at sync time. Sync failures must always degrade (cache / skip), never break
+   plugin load.
 
 ## Testing patterns
 
@@ -198,7 +218,7 @@ plugin's core promise, don't ship a regression:
    arms use `opencode run --pure` = plugin off). Run after ANY change to placeholder
    wording (`placeholderFor`, `searchPlaceholder`, `searchDedupPlaceholder`, read footer)
    or the L0 manifest.
-5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 146 tests).
+5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 159 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`
@@ -221,8 +241,8 @@ the test-time nudge threshold.
 ## Config schema
 
 `okf.schema.json` (root) is a JSON Schema (draft-07) for the **plugin config file** `okf.jsonc` — it
-validates config keys (`enabled`, `scan`, `bundles`, `disclosure`, `unload`, `nudge`, `write`,
-`protectedConcepts`, `debug`). It is **NOT** a schema for OKF concept documents.
+validates config keys (`enabled`, `scan`, `bundles`, `remotes`, `disclosure`, `unload`, `nudge`,
+`write`, `protectedConcepts`, `debug`). It is **NOT** a schema for OKF concept documents.
 
 ## Build artifacts (gitignored — never commit)
 

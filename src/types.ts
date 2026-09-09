@@ -44,8 +44,11 @@ export interface Bundle {
   indexDirs: Set<string>;
   /** Whether a log.md exists at the bundle root. */
   hasLog: boolean;
-  /** Origin: scanned automatically vs. explicitly configured. */
-  origin: "scan" | "config";
+  /**
+   * Origin: auto-scanned, explicitly configured, or synced from a git remote
+   * (write-protected — the next sync would clobber local edits).
+   */
+  origin: "scan" | "config" | "remote";
 }
 
 /** Result of a (bundle, id) lookup, normalized for tool output. */

@@ -211,7 +211,7 @@ async function isBundleRoot(hit: ScanHit): Promise<boolean> {
 export async function buildBundle(
   root: string,
   name: string | undefined,
-  origin: "scan" | "config",
+  origin: "scan" | "config" | "remote",
   hit?: ScanHit,
 ): Promise<Bundle> {
   const scan = hit ?? (await scanDir(root, 8));
@@ -237,8 +237,8 @@ export interface DiscoverOptions {
   scan: boolean;
   /** Max scan depth. */
   maxDepth: number;
-  /** Explicit bundles: { path, name? }. Absolute paths. */
-  configured: Array<{ path: string; name?: string }>;
+  /** Explicit bundles: { path, name?, origin? }. Absolute paths. */
+  configured: Array<{ path: string; name?: string; origin?: "config" | "remote" }>;
 }
 
 /** Whether `dir`'s own root index.md explicitly declares okf_version (spec §12 marker). */
@@ -268,7 +268,7 @@ export async function discoverBundles(opts: DiscoverOptions): Promise<Bundle[]> 
   for (const cfg of opts.configured) {
     if (!(await exists(cfg.path))) continue;
     const hit = await scanDir(cfg.path, 8);
-    const bundle = await buildBundle(cfg.path, cfg.name, "config", hit);
+    const bundle = await buildBundle(cfg.path, cfg.name, cfg.origin ?? "config", hit);
     byRoot.set(bundle.root, bundle);
   }
 
@@ -347,4 +347,18 @@ async function scanForBundleRoots(
   }
 
   await walk(projectRoot, 0, false);
+}
+
+/**
+ * Find accepted bundle roots under a directory (the same heuristic the project
+ * auto-scan uses, rooted elsewhere). Used for remote checkouts: the synced repo
+ * working tree is scanned for bundle roots, which are then registered as
+ * configured bundles. Returns the scan root itself when it qualifies.
+ */
+export async function findBundleRoots(root: string, maxDepth: number): Promise<string[]> {
+  const roots: string[] = [];
+  await scanForBundleRoots(root, maxDepth, async (r) => {
+    roots.push(r);
+  });
+  return roots;
 }

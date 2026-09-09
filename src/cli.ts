@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import { discoverBundles } from "./discovery.js";
 import { loadCliConfig, type OkfConfig } from "./config.js";
 import { listOp, readOp, searchOp, writeOp, validateOp, refsOp, type OpCtx } from "./operations.js";
+import { remoteBundleEntries, syncRemotes, type SyncMode, type SyncResult } from "./sync.js";
 import { PLUGIN_VERSION } from "./version.js";
 import type { Bundle } from "./types.js";
 
@@ -95,11 +96,26 @@ function flagNumber(flags: Map<string, string | true>, name: string): number | u
 
 // ---------- context loading ----------
 
-async function loadBundles(cwd: string, cfg: OkfConfig, root: string | undefined): Promise<Bundle[]> {
-  // --root targets one bundle directly (no scan); otherwise honor config bundles + scan.
+async function loadBundles(
+  cwd: string,
+  cfg: OkfConfig,
+  root: string | undefined,
+  remoteMode: SyncMode | null,
+): Promise<Bundle[]> {
+  // --root targets one bundle directly (no scan); otherwise honor remotes + config bundles + scan.
+  let remoteEntries: Array<{ path: string; name?: string; origin: "remote" }> = [];
+  if (!root && remoteMode !== null && cfg.remotes.length > 0) {
+    // CLI default is "on-clone": routine reads stay offline, the first use clones once.
+    // `okf sync` (or --sync) forces a full update.
+    const results = await syncRemotes(cfg.remotes, remoteMode ?? "on-clone");
+    remoteEntries = await remoteBundleEntries(results);
+  }
   const configured = root
     ? [{ path: resolve(cwd, root) }]
-    : cfg.bundles.map((b) => ({ path: resolve(cwd, b.path), name: b.name }));
+    : [
+        ...remoteEntries,
+        ...cfg.bundles.map((b) => ({ path: resolve(cwd, b.path), name: b.name })),
+      ];
   return discoverBundles({
     projectRoot: cwd,
     scan: root ? false : cfg.scan.enabled,
@@ -114,7 +130,10 @@ async function loadOpCtx(
   flags: Map<string, string | true>,
 ): Promise<OpCtx & { writeExplicitlyEnabled: boolean }> {
   const { cfg, writeExplicitlyEnabled } = await loadCliConfig(cwd);
-  const bundles = await loadBundles(cwd, cfg, flagString(flags, "root"));
+  // --no-sync: skip remote sync entirely (cache-only). --sync: force update, not just clone.
+  const remoteMode: SyncMode | null =
+    flags.get("no-sync") === true ? null : flags.get("sync") === true ? "always" : "on-clone";
+  const bundles = await loadBundles(cwd, cfg, flagString(flags, "root"), remoteMode);
   if (bundles.length === 0) {
     throw new Error(
       `No OKF bundles found under ${cwd}. Put an OKF bundle (markdown concepts with a \`type\` frontmatter + root index.md) in the project, pass --root <path>, or declare bundles in .okf.jsonc.`,
@@ -217,6 +236,7 @@ Commands:
   write <id> --type T ...   Create a concept (--write required)
   update <id> [...]         Partial update: only passed fields change (--write required)
   delete <id>               Delete a concept (--write required)
+  sync                      Update all remotes in .okf.jsonc (exit 1 if any fails)
   manifest                  Print an agent-rule-file manifest (paste into AGENTS.md etc.)
   version                   Print the version
   help                      Show this help
@@ -234,8 +254,11 @@ Common flags:
   --write                   Enable write/update/delete (read-only by default)
   --body-file <path|->      write/update: body from a file, or "-" for stdin
   --type/--title/--description/--tags a,b   write/update fields (--tags comma-separated)
+  --sync                    Force a git update of remotes (default: clone once, then cache)
+  --no-sync                 Skip remote sync entirely, use the local cache as-is
 
-Config: <project>/.okf.jsonc (or .okf.json) — same schema as the plugin's okf.jsonc.
+Config: <project>/.okf.jsonc (or .okf.json) — same schema as the plugin's okf.jsonc,
+including "remotes" (git-hosted knowledge sources, synced read-only; see okf help sync).
 Exit codes: 0 ok · 1 error (not found, validation errors, write refused) · 2 usage.
 
 Examples:
@@ -327,6 +350,28 @@ async function dispatch(args: Args, io: CliIO, cwd: string): Promise<number> {
       const r = await validateOp(ctx, { id, bundle: flagString(flags, "bundle"), all });
       io.write(r.output);
       return r.errors > 0 ? 1 : 0;
+    }
+
+    case "sync": {
+      const { cfg } = await loadCliConfig(cwd);
+      if (cfg.remotes.length === 0) {
+        io.write("No remotes configured in .okf.jsonc — nothing to sync.");
+        return 0;
+      }
+      const results: SyncResult[] = [];
+      await syncRemotes(cfg.remotes, "always", (r) => results.push(r));
+      const entries = await remoteBundleEntries(results);
+      for (const r of results) {
+        const name = r.remote.name ?? r.remote.url;
+        io.write(`${r.status.padEnd(8)} ${name}${r.message ? ` — ${r.message}` : ""}`);
+      }
+      const bundleNames = entries.map((e) => e.name).filter(Boolean);
+      if (bundleNames.length > 0) {
+        io.write(`bundles: ${bundleNames.join(", ")}`);
+      } else {
+        io.write("bundles: (none found in the synced checkouts — is there an OKF bundle inside?)");
+      }
+      return results.some((r) => r.status === "failed") ? 1 : 0;
     }
 
     case "refs": {

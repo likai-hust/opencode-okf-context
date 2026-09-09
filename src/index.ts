@@ -17,6 +17,7 @@ import { discoverBundles } from "./discovery.js";
 import { renderManifest } from "./indexing.js";
 import { buildTools } from "./tools.js";
 import { transformOutbound } from "./messages.js";
+import { remoteBundleEntries, syncRemotes, syncWarnLine } from "./sync.js";
 import { state } from "./state.js";
 
 export const OkfPlugin: Plugin = async (input: PluginInput, options = {}) => {
@@ -30,16 +31,29 @@ export const OkfPlugin: Plugin = async (input: PluginInput, options = {}) => {
     hooks.tool = buildTools(cfg);
   }
 
-  // Discovery loader: discovers bundles (scan + configured) and caches them.
+  // Discovery loader: discovers bundles (remote-synced + scan + configured) and caches them.
   async function discover(): Promise<import("./types.js").Bundle[]> {
     if (!cfg.enabled) {
       state.setBundles([]);
       return [];
     }
-    const configured = cfg.bundles.map((b) => ({
-      path: resolve(directory, b.path),
-      name: b.name,
-    }));
+    const configured: Array<{ path: string; name?: string; origin?: "config" | "remote" }> =
+      cfg.bundles.map((b) => ({
+        path: resolve(directory, b.path),
+        name: b.name,
+      }));
+    // Remote knowledge sources: sync (clone/update, network failures degrade to the
+    // shared cache) and register the bundle roots found inside the checkout.
+    if (cfg.remotes.length > 0) {
+      const results = await syncRemotes(cfg.remotes, "always");
+      for (const r of results) {
+        if (r.status === "cached" || r.status === "failed") {
+          // eslint-disable-next-line no-console
+          console.error(syncWarnLine(r));
+        }
+      }
+      configured.push(...(await remoteBundleEntries(results)));
+    }
     const bundles = await discoverBundles({
       projectRoot: directory,
       scan: cfg.scan.enabled,

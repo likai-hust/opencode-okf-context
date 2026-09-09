@@ -114,6 +114,7 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
   "enabled": true,
   "scan":   { "enabled": true, "maxDepth": 4 },
   "bundles": [{ "path": "docs/knowledge", "name": "project-kb" }],
+  "remotes": [{ "url": "https://git.example.com/team/wiki-kb.git", "name": "team-wiki" }],
   "disclosure": { "injectManifest": true, "maxManifestChars": 2000 },
   "unload": {
     "afterTurns": 4,          // 加载后经过 4 轮用户消息即卸载（按大上下文窗口调优）
@@ -129,11 +130,29 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 
 自动扫描会跳过构建/VCS 目录（`node_modules`、`dist`、`.git` 等）和隐藏目录——唯一例外是 **`.opencode` 会被扫描**，放在其中的 bundle（如 `.opencode/skill/`）可被自动发现。
 
+### 远程知识源（git）
+
+`remotes` 指向 git 托管的知识库——团队分发通道：知识库作者 push 到 git，所有 agent 自动拉取。发现之前，每个 remote 会被 clone/更新（`--depth 1` 浅克隆 + `reset --hard`）到**共享缓存**（`~/.cache/opencode-okf/remotes/<hash(url+ref)>`，可用 `$OKF_REMOTE_CACHE` 覆盖），checkout 内发现的 OKF bundle 会像本地 bundle 一样注册——同样的 L0/L1/L2 渐进披露、同样的卸载语义。
+
+```jsonc
+"remotes": [
+  { "url": "https://git.example.com/team/wiki-kb.git", "name": "team-wiki" },
+  { "url": "https://git.example.com/team/glossary.git", "ref": "v1.2", "subdir": "kb" },
+  { "url": "https://git.example.com/private/ops-kb.git", "auth": "env:GIT_TOKEN" }
+]
+```
+
+- **故障绝不阻断会话**：源不可达时降级使用现有缓存（stderr 一条警告）；首次 clone 失败则跳过该 remote。
+- **设计上只读**：`okf_write` 拒绝 remote bundle——下次同步的 `reset --hard` 会冲掉本地改动。git 仓库是唯一事实源；本插件保持知识*访问*层定位，不做写回同步。
+- **鉴权**：`auth: "env:VARNAME"` 在同步时从环境变量读 token（GitLab/GitHub PAT 风格，`authUser` 默认 `oauth2`）——token 绝不落进会被提交的 okf.jsonc。ssh URL 直接走你的 ssh agent。
+- **命名**：仓库里只有一个 bundle 时直接用 `name`；多 bundle 仓库按根目录各注册一个，命名为 `name/<叶子目录>`。
+- **CLI 对齐**：`okf sync` 强制更新全部 remote（任一失败退出码 1——可作 CI 门禁）；其余 `okf` 命令首次使用时 clone、之后走缓存（`--sync` / `--no-sync` 可覆盖）。
+
 ## 开发
 
 ```bash
 bun install
-bun test            # 146 个测试
+bun test            # 159 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 

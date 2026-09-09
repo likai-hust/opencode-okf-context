@@ -46,6 +46,28 @@ export interface ScanConfig {
   maxDepth: number;
 }
 
+/**
+ * A git-hosted knowledge source. Cloned/updated into a shared local cache before
+ * discovery (see sync.ts); the bundle roots inside become configured bundles with
+ * origin "remote" (write-protected — the next sync would clobber local edits).
+ */
+export interface RemoteSource {
+  /** Git URL (https or ssh). `env:VARNAME`-style tokens never live here — see `auth`. */
+  url: string;
+  /** Branch or tag to track. Default: the remote's HEAD. */
+  ref?: string;
+  /** Bundle sub-directory inside the repo. Default: scan the whole checkout. */
+  subdir?: string;
+  /** Display name for the bundle(s). Default: repo basename minus .git. */
+  name?: string;
+  /** Credential spec "env:VARNAME" — the env var holds the token (https URLs only). */
+  auth?: string;
+  /** Username for https token auth. Default "oauth2" (works for GitLab & GitHub PATs). */
+  authUser?: string;
+  /** Set false to skip network sync and use the cache as-is (e.g. flaky intranet). */
+  autoSync?: boolean;
+}
+
 export interface DisclosureConfig {
   injectManifest: boolean;
   maxManifestChars: number;
@@ -55,6 +77,8 @@ export interface OkfConfig {
   enabled: boolean;
   scan: ScanConfig;
   bundles: Array<{ path: string; name?: string }>;
+  /** Git-hosted knowledge sources, synced to a shared cache before discovery. */
+  remotes: RemoteSource[];
   disclosure: DisclosureConfig;
   unload: UnloadConfig;
   nudge: NudgeConfig;
@@ -67,6 +91,7 @@ export const DEFAULT_CONFIG: OkfConfig = {
   enabled: true,
   scan: { enabled: true, maxDepth: 4 },
   bundles: [],
+  remotes: [],
   disclosure: { injectManifest: true, maxManifestChars: 2000 },
   // Tuned for large (256K-token) context windows: hold concepts a little longer before
   // unloading (reloading costs a full re-read + a tool round-trip), and only nudge when

@@ -462,6 +462,13 @@ export async function writeOp(ctx: OpCtx, args: WriteArgs, onWrite?: () => void)
   if (!bundle) {
     throw new Error(`Bundle not found: ${args.bundle ?? "(none)"}`);
   }
+  // Remote (git-synced) knowledge bases are read-only: any local edit would be silently
+  // wiped by the next `git reset --hard`. The source of truth is the git repository.
+  if (bundle.origin === "remote") {
+    throw new Error(
+      `Bundle "${bundle.name}" is a remote (git-synced) knowledge base — read-only by design; the next sync would overwrite local changes. Edit the source repository instead, or clone it locally and declare it under "bundles".`,
+    );
+  }
   const id = normalizeId(args.id);
   if (!id || id.includes("..") || isReservedId(id)) {
     throw new Error(`Invalid concept id: "${args.id}". Must not be empty, must not escape the bundle, and must not use reserved name index/log.`);
