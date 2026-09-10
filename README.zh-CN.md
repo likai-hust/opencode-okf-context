@@ -147,13 +147,14 @@ opencode debug agent build | grep okf   # -> okf_list/read/search/write/validate
 - **设计上只读**：`okf_write` 拒绝 remote bundle——下次同步的 `reset --hard` 会冲掉本地改动。git 仓库是唯一事实源；本插件保持知识*访问*层定位，不做写回同步。
 - **鉴权**：`auth: "env:VARNAME"` 在同步时从环境变量读 token（GitLab/GitHub PAT 风格，`authUser` 默认 `oauth2`）——token 绝不落进会被提交的 okf.jsonc。ssh URL 直接走你的 ssh agent。
 - **命名**：仓库里只有一个 bundle 时直接用 `name`；多 bundle 仓库按根目录各注册一个，命名为 `name/<叶子目录>`。
+- **自仓库感知**：把当前项目自己的 git origin 配成 remote 会被识别（URL 比对对协议/`git@`/`.git` 后缀不敏感）并跳过——不产生冗余克隆、不重复注册 bundle；`okf sync` 会将其报告为 `skipped`。
 - **CLI 对齐**：`okf sync` 强制更新全部 remote（任一失败退出码 1——可作 CI 门禁）；其余 `okf` 命令首次使用时 clone、之后走缓存（`--sync` / `--no-sync` 可覆盖）。
 
 ## 开发
 
 ```bash
 bun install
-bun test            # 165 个测试
+bun test            # 168 个测试
 bunx tsc --noEmit   # 类型检查
 ```
 

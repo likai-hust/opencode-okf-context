@@ -29,7 +29,7 @@ history *on the way to the LLM* only — it never mutates the real session histo
 
 ```bash
 bun install
-bun test            # 165 tests across core / messages / write / validate / search / robustness / integration / version / sync / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
+bun test            # 168 tests across core / messages / write / validate / search / robustness / integration / version / sync / unload-dataset / prompt-trigger / cli / defaults / reload-e2e / compaction-e2e / efficiency-e2e (opt-in)
 bunx tsc --noEmit   # type-check (must pass before any commit)
 bun run build       # tsup -> dist/index.js (single self-contained file) + tsc d.ts
 npm pack            # produces opencode-okf-context-0.3.0.tgz
@@ -49,6 +49,9 @@ src/
                   (~/.cache/opencode-okf/remotes/<hash(url+ref)>, override $OKF_REMOTE_CACHE),
                   offline degrade to cache, env-var token auth (never in okf.jsonc),
                   remoteBundleEntries() turns synced checkouts into configured bundles;
+                  a remote equal to the project's own git origin (repoKey comparison,
+                  protocol/git@/.git-insensitive) is SKIPPED — never clone the repo that
+                  is already checked out as the project;
                   every sync appends to <cacheRoot>/sync.log ($OKF_SYNC_LOG) — status/
                   duration/commit/bundles, success included, rotated at 512KB, NEVER
                   containing the remote URL (ssh URLs embed user@host; git errors are
@@ -222,7 +225,7 @@ plugin's core promise, don't ship a regression:
    arms use `opencode run --pure` = plugin off). Run after ANY change to placeholder
    wording (`placeholderFor`, `searchPlaceholder`, `searchDedupPlaceholder`, read footer)
    or the L0 manifest.
-5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 165 tests).
+5. **Full suite + typecheck**: `bun test` + `bunx tsc --noEmit` (currently 168 tests).
 
 Prompt wording is a *contract*: `tests/prompt-trigger.test.ts` static guards pin the exact
 wording (reactive/proactive triggers, bilingual phrases, decision guide, `okf_search`

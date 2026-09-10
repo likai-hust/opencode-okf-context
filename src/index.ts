@@ -47,7 +47,7 @@ export const OkfPlugin: Plugin = async (input: PluginInput, options = {}) => {
     // Remote knowledge sources: sync (clone/update, network failures degrade to the
     // shared cache) and register the bundle roots found inside the checkout.
     if (cfg.remotes.length > 0) {
-      const results = await syncRemotes(cfg.remotes, "always");
+      const results = await syncRemotes(cfg.remotes, "always", undefined, directory);
       for (const r of results) {
         if (r.status === "cached" || r.status === "failed") {
           // eslint-disable-next-line no-console

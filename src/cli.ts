@@ -107,7 +107,7 @@ async function loadBundles(
   if (!root && remoteMode !== null && cfg.remotes.length > 0) {
     // CLI default is "on-clone": routine reads stay offline, the first use clones once.
     // `okf sync` (or --sync) forces a full update.
-    const results = await syncRemotes(cfg.remotes, remoteMode ?? "on-clone");
+    const results = await syncRemotes(cfg.remotes, remoteMode ?? "on-clone", undefined, cwd);
     remoteEntries = await remoteBundleEntries(results);
   }
   const configured = root
@@ -361,7 +361,7 @@ async function dispatch(args: Args, io: CliIO, cwd: string): Promise<number> {
         return 0;
       }
       const results: SyncResult[] = [];
-      await syncRemotes(cfg.remotes, "always", (r) => results.push(r));
+      await syncRemotes(cfg.remotes, "always", (r) => results.push(r), cwd);
       const entries = await remoteBundleEntries(results);
       for (const r of results) {
         const name = r.remote.name ?? r.remote.url;

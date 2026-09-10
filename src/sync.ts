@@ -32,7 +32,7 @@ const exec = promisify(execFile);
 /** When to talk to the network for a remote. */
 export type SyncMode = "always" | "on-clone";
 
-export type SyncStatus = "cloned" | "synced" | "cached" | "failed";
+export type SyncStatus = "cloned" | "synced" | "cached" | "failed" | "skipped";
 
 export interface SyncResult {
   remote: RemoteSource;
@@ -282,21 +282,71 @@ function sanitize(e: unknown, authedUrl: string, plainUrl: string, label: string
 }
 
 /**
+ * Best-effort repository identity of a git URL: host + path, insensitive to protocol
+ * (https vs ssh), user prefix (git@), port, trailing slash, and the .git suffix.
+ * Used to detect "this remote IS the current project's own repository" — configuring
+ * that would clone a redundant, write-protected copy of what is already checked out.
+ */
+export function repoKey(url: string): string {
+  const s = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  // scp-like syntax: git@host:path (ssh default form)
+  const scp = /^([^@/]+)@([^:/]+):(.+)$/.exec(s);
+  if (scp) return `${scp[2]}/${scp[3]}`.toLowerCase();
+  // scheme://[user@]host[:port]/path
+  const u = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/@]+@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(s);
+  if (u) return `${u[1]}/${u[2]}`.toLowerCase();
+  // local paths and host-less URLs (file:///path): compare scheme-stripped
+  return s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").toLowerCase();
+}
+
+/** The project's own origin URL, or undefined (not a git repo / no origin / git absent). */
+export async function projectOriginUrl(projectDir: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await exec("git", ["-C", projectDir, "remote", "get-url", "origin"], {
+      timeout: 5_000,
+    });
+    const url = stdout.toString().trim();
+    return url || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Sync all remotes sequentially (they share a cache root; sequential keeps failure
  * reporting simple and avoids hammering one git server). Each remote degrades
  * independently — one bad URL never blocks the others.
+ *
+ * When `projectDir` is given, a remote whose URL IS the project's own origin is
+ * SKIPPED (status "skipped", logged): cloning it would register a duplicate bundle
+ * for what auto-scan already sees in the working tree, shadowing the writable copy.
  */
 export async function syncRemotes(
   remotes: RemoteSource[],
   mode: SyncMode,
   onResult?: (r: SyncResult) => void,
+  projectDir?: string,
 ): Promise<SyncResult[]> {
+  const origin = projectDir ? await projectOriginUrl(projectDir) : undefined;
+  const selfKey = origin ? repoKey(origin) : undefined;
+
   const results: SyncResult[] = [];
   for (const remote of remotes) {
+    const name = remote.name ?? remoteNameFromUrl(remote.url);
+    if (selfKey !== undefined && repoKey(remote.url) === selfKey) {
+      const dir = remoteCacheDir(remote);
+      await appendSyncLog(
+        "INFO",
+        `sync name=${name} cache=${basename(dir)} status=skipped 0ms "self origin — already checked out as this project"`,
+      );
+      const r: SyncResult = { remote, dir, status: "skipped", message: "self origin — already checked out as this project" };
+      results.push(r);
+      onResult?.(r);
+      continue;
+    }
     if (remote.autoSync === false) {
       const dir = remoteCacheDir(remote);
       if (await isGitRepo(dir)) {
-        const name = remote.name ?? remoteNameFromUrl(remote.url);
         await appendSyncLog("INFO", `sync name=${name} cache=${basename(dir)} status=cached 0ms "autoSync disabled"`);
         const r = { remote, dir, status: "cached" as const, message: "autoSync disabled" };
         results.push(r);
@@ -331,7 +381,7 @@ export async function remoteBundleEntries(
 ): Promise<Array<{ path: string; name?: string; origin: "remote" }>> {
   const entries: Array<{ path: string; name?: string; origin: "remote" }> = [];
   for (const r of results) {
-    if (r.status === "failed") continue;
+    if (r.status === "failed" || r.status === "skipped") continue;
     const scanRoot = r.remote.subdir ? join(r.dir, r.remote.subdir) : r.dir;
     const roots = await findBundleRoots(scanRoot, 6);
     const base = r.remote.name ?? remoteNameFromUrl(r.remote.url);

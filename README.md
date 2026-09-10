@@ -147,13 +147,14 @@ Auto-scan skips build/VCS directories (`node_modules`, `dist`, `.git`, …) and 
 - **Read-only by design**: `okf_write` refuses remote bundles — the next sync would `reset --hard` local edits away. The git repo is the source of truth; this plugin stays a knowledge *access* layer, not a write-back sync.
 - **Auth**: `auth: "env:VARNAME"` reads the token from the environment at sync time (GitLab/GitHub PAT style, `authUser` defaults to `oauth2`) — tokens never live in the committed okf.jsonc. ssh URLs use your ssh agent as-is.
 - **Naming**: a repo with a single bundle takes `name` as-is; a multi-bundle repo registers one bundle per root, named `name/<leaf>`.
+- **Self-repository aware**: configuring the current project's own git origin as a remote is detected (protocol/`git@`/`.git`-insensitive URL comparison) and skipped — no redundant clone, no duplicate bundle; `okf sync` reports it as `skipped`.
 - **CLI parity**: `okf sync` force-updates all remotes (exit 1 if any fails — usable as a CI gate); other `okf` commands clone on first use and then work from the cache (`--sync` / `--no-sync` to override).
 
 ## Development
 
 ```bash
 bun install
-bun test            # 165 tests
+bun test            # 168 tests
 bunx tsc --noEmit   # type-check
 ```
 

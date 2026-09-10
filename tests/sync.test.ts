@@ -19,8 +19,10 @@ import {
   gitEnv,
   remoteBundleEntries,
   remoteCacheDir,
+  repoKey,
   setSyncDebug,
   syncLogPath,
+  syncRemotes,
   syncRemote,
 } from "../src/sync.js";
 import { writeOp, type OpCtx } from "../src/operations.js";
@@ -311,6 +313,76 @@ describe("sync — sync.log observability", () => {
     expect(env.GIT_SSH_COMMAND).toContain("ConnectTimeout=10");
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
   });
+});
+
+describe("sync — self-origin guard", () => {
+  function capture() {
+    const out: string[] = [];
+    const err: string[] = [];
+    return {
+      io: { write: (s: string) => out.push(s), err: (s: string) => err.push(s) },
+      out: () => out.join("\n"),
+      errText: () => err.join("\n"),
+    };
+  }
+
+  let selfProj: string;
+  let selfOrigin: string; // its own repo, so the "no cache clone" assertion starts cold
+
+  beforeAll(async () => {
+    // A project whose git origin IS the remote configured in its .okf.jsonc.
+    selfOrigin = await mkdtemp(join(tmpdir(), "okf-selforigin-"));
+    await git(selfOrigin, "init", "-b", "main");
+    await git(selfOrigin, "add", "-A");
+    await git(selfOrigin, "commit", "--allow-empty", "-m", "init");
+    const selfUrl = `file://${selfOrigin}`;
+
+    selfProj = await mkdtemp(join(tmpdir(), "okf-self-"));
+    await git(selfProj, "init", "-b", "main");
+    await git(selfProj, "remote", "add", "origin", selfUrl);
+    await writeFile(
+      join(selfProj, ".okf.jsonc"),
+      JSON.stringify({ scan: { enabled: false }, remotes: [{ url: selfUrl, name: "self-kb" }] }),
+      "utf8",
+    );
+  });
+
+  afterAll(async () => {
+    await rm(selfProj, { recursive: true, force: true });
+    await rm(selfOrigin, { recursive: true, force: true });
+  });
+
+  test("repoKey is protocol/user/.git insensitive", () => {
+    const a = repoKey("https://git.example.com/team/kb.git");
+    expect(a).toBe(repoKey("git@git.example.com:team/kb"));
+    expect(a).toBe(repoKey("ssh://git@git.example.com:22/team/kb"));
+    expect(a).toBe(repoKey("https://git.example.com/team/kb/"));
+    expect(a).not.toBe(repoKey("https://git.example.com/other/kb.git"));
+    expect(repoKey("file:///tmp/x/repo")).toBe(repoKey("/tmp/x/repo"));
+  });
+
+  test("syncRemotes skips the project's own repository (no cache clone, no bundle)", async () => {
+    const selfUrl = `file://${selfOrigin}`;
+    const results = await syncRemotes([{ url: selfUrl, name: "self-kb" }], "always", undefined, selfProj);
+    expect(results.length).toBe(1);
+    expect(results[0]!.status).toBe("skipped");
+    expect(results[0]!.message).toContain("self origin");
+
+    // Nothing registered and nothing cloned into the shared cache.
+    expect(await remoteBundleEntries(results)).toEqual([]);
+    await expect(stat(remoteCacheDir({ url: selfUrl }))).rejects.toThrow();
+
+    const log = await readFile(syncLogPath(), "utf8");
+    expect(log).toContain('status=skipped 0ms "self origin');
+  }, 60_000);
+
+  test("okf sync reports the skip and exits 0", async () => {
+    const c = capture();
+    expect(await runCli(["sync"], c.io, selfProj)).toBe(0);
+    expect(c.out()).toContain("skipped");
+    expect(c.out()).toContain("self-kb");
+    expect(c.out()).toContain("(none found");
+  }, 60_000);
 });
 
 describe("okf CLI — remotes", () => {
